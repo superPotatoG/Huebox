@@ -1,0 +1,11 @@
+# Normalise text line endings; never diff/merge Unreal binary assets.
+* text=auto
+
+*.uasset binary
+*.umap binary
+*.docx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.wav binary
+*.fbx binary

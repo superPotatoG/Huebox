@@ -1,0 +1,53 @@
+# Unreal Engine generated / per-machine folders (rebuilt automatically)
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+
+# IDE / project files (regenerate with "Generate Visual Studio project files")
+.vs/
+.vscode/
+.idea/
+*.sln
+*.slnx
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Compiled artifacts
+*.pdb
+*.obj
+*.dll
+*.exe
+*.lib
+*.exp
+*.ilk
+
+# Packaged builds and archives
+Packaged/
+Windows/
+*.zip
+*.7z
+
+# Office lock files (e.g. while the GDD is open in Word)
+~$*
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Epic template content (Unreal EULA: not redistributed in a public repo).
+# Keep the files locally; on a fresh clone re-add them from UE's Third Person template if needed.
+Content/Characters/
+Content/LevelPrototyping/
+Content/ThirdPerson/
+Content/Input/
+Content/__ExternalActors__/ThirdPerson/
+Content/__ExternalObjects__/ThirdPerson/
+Content/Collections/
+Content/Developers/

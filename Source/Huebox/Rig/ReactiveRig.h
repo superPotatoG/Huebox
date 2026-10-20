@@ -65,6 +65,8 @@ public:
 	float GetTrackLength() const { return TrackLength; }
 	FVector GetTrackDirection() const;
 	FHueRigSample MakeSample() const;
+	/** World location of the moving performer (the physics body), e.g. for the side camera to follow. */
+	FVector GetPerformerLocation() const;
 
 	/** Shows marker posts for the objectives (far marker, return marker, target zone). */
 	void ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives);

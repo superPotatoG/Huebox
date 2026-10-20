@@ -104,7 +104,10 @@ public:
 	EHueModuleType GetModuleType() const { return ModuleType; }
 
 	// ---- Presentation ----------------------------------------------------------------------------------------
+	// Every block is a flat 2D tile read from straight above (build view): label on the top face, port markers
+	// lying on the top face at the edges.
 
+	/** Slight amber tint while a build cursor / crosshair targets this block. */
 	void SetHighlighted(bool bInHighlighted);
 	/** Briefly tints the block red and shows a cross on Face (blocked entry, occupied delay, mixer failure...). */
 	void FlashBlocked(EHueDir Face);
@@ -112,8 +115,9 @@ public:
 	virtual void RefreshVisuals();
 
 	// ---- IHueInteractable ----------------------------------------------------------------------------------
-	virtual FString GetInteractPrompt_Implementation(AHueboxCharacter* Interactor) const override;
-	virtual bool Interact_Implementation(AHueboxCharacter* Interactor) override;
+	virtual FString GetInteractPrompt_Implementation(AActor* Interactor) const override;
+	/** Collects this block through the interactor's UHueBuildToolComponent (which owns every rule). */
+	virtual bool Interact_Implementation(AActor* Interactor) override;
 
 	/** Placeholder shape assets (engine basic shapes), shared by subclasses. */
 	static UStaticMesh* GetCubeMesh();
@@ -127,16 +131,19 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnConstruction(const FTransform& Transform) override;
 
-	/** Rebuilds the small marker components that show input/output faces. */
+	/**
+	 * Rebuilds the small marker components that show input/output faces: flat dark shapes lying on the top face at
+	 * the edge of each port face (square = input, triangle pointing out = output, bar = both directions).
+	 */
 	void RebuildPortMarkers();
 
 	/** Colour of the body when idle (subclasses set it in their constructor). */
 	UPROPERTY(EditAnywhere, Category = "Hue|Visual")
 	FLinearColor BaseColor = FLinearColor(0.6f, 0.6f, 0.6f);
 
-	/** Body scale in metres-ish units of the 100 cm engine cube. */
+	/** Body scale in units of the 100 cm engine cube. Default: flat module tile, 80 x 80 cm, 6 cm thick. */
 	UPROPERTY(EditAnywhere, Category = "Hue|Visual")
-	FVector BodyScale = FVector(0.7f, 0.7f, 0.5f);
+	FVector BodyScale = FVector(0.8f, 0.8f, 0.06f);
 
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Grid")
 	FIntPoint Cell = FIntPoint::ZeroValue;
@@ -219,12 +226,22 @@ protected:
 	/** Readable label colour on top of Background: dark text on light bodies, white on dark ones. */
 	static FLinearColor ContrastTextColor(const FLinearColor& Background);
 
+	/** Dark label ink used on every light tile (white modules, coloured sources / receivers). */
+	static FLinearColor TileLabelColor();
+
 private:
 	void EndFlash();
 	void ApplyFacingRotation();
-	/** Pushes LabelString / LabelColor (or the red flash cross) to the text component. */
+	/** Pushes LabelString / LabelColor (or the flash cross) to the text component. */
 	void ApplyLabel();
+	/** Shrinks long labels ("D 1.25s") so they stay clear of the edge port markers. */
+	void FitLabelToTile();
+	/** Distance of the port markers from the cell centre: the tile edge, at most 40 % of the board's cell size. */
+	float GetPortMarkerOffset() const;
 
-	/** Face the current blocked flash refers to; the red "X" is drawn towards it. */
+	/** Face the current blocked flash refers to; the "X" is drawn towards it. */
 	EHueDir FlashFace = EHueDir::East;
+
+	/** Marker offset the current PortMarkers were built with (-1 = none yet); re-laid out if the board differs. */
+	float PortMarkerOffsetInUse = -1.f;
 };

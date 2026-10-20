@@ -1,5 +1,6 @@
 #include "UI/HueboxHUD.h"
 
+#include "Blocks/HueFixedBlocks.h"
 #include "Blocks/HueModuleBlocks.h"
 #include "Blocks/PulseBlock.h"
 #include "Engine/Canvas.h"
@@ -7,7 +8,10 @@
 #include "Engine/Font.h"
 #include "Engine/World.h"
 #include "Game/ExhibitManager.h"
+#include "GameFramework/Pawn.h"
 #include "Grid/HueBoard.h"
+#include "Player/HueBuildToolComponent.h"
+#include "Player/HueBuilderPawn.h"
 #include "Player/HueboxCharacter.h"
 #include "Player/HueInteractable.h"
 #include "Player/HueInventoryComponent.h"
@@ -30,12 +34,30 @@ namespace HueHUD
 	static const FLinearColor BadColor(1.f, 0.38f, 0.32f);
 	static const FLinearColor InfoColor(0.55f, 0.85f, 1.f);
 
+	/** Minimap / tray icons use the look of the in-world "2D white props": white tiles, dark letters. */
+	static const FLinearColor TileWhite(0.92f, 0.92f, 0.9f);
+	static const FLinearColor TileInk(0.08f, 0.08f, 0.08f);
+	static const FLinearColor BarrierFill(0.03f, 0.03f, 0.035f);
+	static const FLinearColor BarrierEdge(0.42f, 0.42f, 0.42f);
+	static const FLinearColor MapFloor(0.17f, 0.15f, 0.13f, 0.92f);
+	static const FLinearColor MapLine(0.36f, 0.33f, 0.3f, 0.9f);
+
 	static constexpr float Margin = 24.f;
 	static constexpr float Pad = 8.f;
 	static constexpr float LineGap = 2.f;
 	static constexpr float PanelGap = 12.f;
 	static constexpr float FeedbackHoldSeconds = 6.f;
 	static constexpr float FeedbackFadeSeconds = 2.f;
+
+	/** Edge of the minimap grid at UIScale 1 (the longer grid side fills it). */
+	static constexpr float MinimapSize = 300.f;
+	/** Block tile edge as a fraction of the cell (the gap shows the grid lines). */
+	static constexpr float MapTileFraction = 0.8f;
+	static constexpr int32 CircleSides = 16;
+
+	/** Hint bar spacing between a key and its action, and between two pairs. */
+	static constexpr float HintKeyGap = 5.f;
+	static constexpr float HintPairGap = 18.f;
 
 	struct FLine
 	{
@@ -75,6 +97,17 @@ namespace HueHUD
 		// Empty lines still take one line of height.
 		HUD.GetTextSize(Text.IsEmpty() ? FString(TEXT(" ")) : Text, Width, Height, Font, Scale);
 		return FVector2f(Width, Height);
+	}
+
+	/** Widest line of Lines (heading lines measured with the heading font). */
+	static float MeasureLinesWidth(const AHUD& HUD, const TArray<FLine>& Lines, float Scale)
+	{
+		float Width = 0.f;
+		for (const FLine& Line : Lines)
+		{
+			Width = FMath::Max(Width, static_cast<float>(Measure(HUD, Line.Text, Line.bHeading ? HeadingFont() : BodyFont(), Scale).X));
+		}
+		return Width;
 	}
 
 	/** Greedy word wrap of Text (may contain '\n') into lines no wider than MaxWidth pixels. */
@@ -164,6 +197,31 @@ namespace HueHUD
 		HUD.DrawRect(Color, X + W - Thickness, Y + Thickness, Thickness, H - 2.f * Thickness);
 	}
 
+	/** Text centred on (CenterX, CenterY), scaled so that its line height is about Height pixels. */
+	static void DrawCentredText(AHUD& HUD, const FString& Text, float CenterX, float CenterY, float Height, const FLinearColor& Color)
+	{
+		if (Text.IsEmpty() || Height < 2.f)
+		{
+			return;
+		}
+
+		UFont* Font = BodyFont();
+		const FVector2f Unit = Measure(HUD, Text, Font, 1.f);
+		if (Unit.Y <= 0.f)
+		{
+			return;
+		}
+		const float Scale = Height / Unit.Y;
+		HUD.DrawText(Text, Color, CenterX - Unit.X * Scale * 0.5f, CenterY - Unit.Y * Scale * 0.5f, Font, Scale);
+	}
+
+	/** Filled square with a centred letter (tray icons). */
+	static void DrawLetterTile(AHUD& HUD, float X, float Y, float Size, const FLinearColor& Fill, const FString& Letter, const FLinearColor& Ink)
+	{
+		HUD.DrawRect(Fill, X, Y, Size, Size);
+		DrawCentredText(HUD, Letter, X + Size * 0.5f, Y + Size * 0.5f, Size * 0.8f, Ink);
+	}
+
 	static FLinearColor FeedbackColor(EHueFeedbackKind Kind)
 	{
 		switch (Kind)
@@ -230,14 +288,120 @@ namespace HueHUD
 		return TEXT("Ports: ") + FString::Join(Parts, TEXT(", "));
 	}
 
+	/** One-letter module code shared by the tray icons and the minimap. */
+	static const TCHAR* ModuleLetter(EHueModuleType Type)
+	{
+		switch (Type)
+		{
+		case EHueModuleType::Turn:       return TEXT("T");
+		case EHueModuleType::ColorShift: return TEXT("C");
+		case EHueModuleType::Delay:      return TEXT("D");
+		case EHueModuleType::Mixer:      return TEXT("M");
+		case EHueModuleType::None:
+		default:                         return TEXT("");
+		}
+	}
+
+	static bool HasAnyModule(const UHueInventoryComponent& Inventory)
+	{
+		return Inventory.GetSlots().ContainsByPredicate([](const FHueInventorySlot& Slot) { return !Slot.IsEmpty(); });
+	}
+
+	/** How one block looks on the minimap. */
+	struct FMapTile
+	{
+		FLinearColor Fill = TileWhite;
+		FLinearColor Ink = TileInk;
+		FString Letter;
+		/** Barrier: dark filled cell, no letter, no ports. */
+		bool bSolid = false;
+		/** A delay buffer / mixer wait holds a signal (not travelling, so not among the pulse snapshots). */
+		bool bHolding = false;
+	};
+
+	static FMapTile DescribeMapTile(const APulseBlock& Block)
+	{
+		FMapTile Tile;
+		if (const AHueSourceBlock* Source = Cast<AHueSourceBlock>(&Block))
+		{
+			Tile.Fill = HueColor::ToLinear(Source->GetEmitColor());
+			Tile.Letter = TEXT("S");
+		}
+		else if (const AHueReceiverBlock* Receiver = Cast<AHueReceiverBlock>(&Block))
+		{
+			Tile.Fill = HueColor::ToLinear(Receiver->GetCurrentColor());
+			Tile.Letter = TEXT("R");
+		}
+		else if (Block.IsA<AHueBarrierBlock>())
+		{
+			Tile.Fill = BarrierFill;
+			Tile.bSolid = true;
+		}
+		else
+		{
+			Tile.Letter = ModuleLetter(Block.GetModuleType());
+			if (Tile.Letter.IsEmpty())
+			{
+				// Unknown kind (e.g. a future subclass): first letter of its name on a gray tile.
+				Tile.Fill = FLinearColor(0.6f, 0.6f, 0.6f);
+				Tile.Letter = Block.GetDisplayName().Left(1).ToUpper();
+			}
+
+			if (const AHueDelayBlock* Delay = Cast<AHueDelayBlock>(&Block))
+			{
+				Tile.bHolding = Delay->IsHolding();
+			}
+			else if (const AHueMixerBlock* Mixer = Cast<AHueMixerBlock>(&Block))
+			{
+				Tile.bHolding = Mixer->IsWaiting();
+			}
+		}
+		return Tile;
+	}
+
+	/** Screen step of a board direction on the top-down map: East = right, North (+Y) = down, South (-Y) = up. */
+	static FVector2f MapStep(EHueDir Dir)
+	{
+		const FIntPoint Offset = HueDir::ToOffset(Dir);
+		return FVector2f(static_cast<float>(Offset.X), static_cast<float>(Offset.Y));
+	}
+
+	/**
+	 * Port mark on a minimap tile centred at (CX, CY): a dark bar just inside the face's edge; outputs and two-way
+	 * ports also get a short spout of the tile colour sticking out over the grid, so the exit side reads at a glance.
+	 */
+	static void DrawPortMark(AHUD& HUD, float CX, float CY, float TileSize, const FHuePort& Port, const FLinearColor& Ink, const FLinearColor& Fill)
+	{
+		const FVector2f Step = MapStep(Port.Face);
+		// North / South faces are horizontal edges on the map.
+		const bool bHorizontalEdge = FMath::IsNearlyZero(Step.X);
+		const bool bOutput = Port.Kind != EHuePortKind::Input;
+		const float Thick = FMath::Max(2.f, TileSize * 0.12f);
+		const float Length = TileSize * (bOutput ? 0.42f : 0.3f);
+
+		// Rect Along x Across, oriented to the edge, centred Reach pixels from the tile centre towards the face.
+		auto DrawEdgeRect = [&HUD, CX, CY, Step, bHorizontalEdge](float Reach, float Along, float Across, const FLinearColor& Color)
+		{
+			const float W = bHorizontalEdge ? Along : Across;
+			const float H = bHorizontalEdge ? Across : Along;
+			HUD.DrawRect(Color, CX + Step.X * Reach - W * 0.5f, CY + Step.Y * Reach - H * 0.5f, W, H);
+		};
+
+		DrawEdgeRect(TileSize * 0.5f - Thick * 0.5f, Length, Thick, Ink);
+		if (bOutput)
+		{
+			DrawEdgeRect(TileSize * 0.5f + Thick * 0.5f, Length * 0.5f, Thick, Fill);
+		}
+	}
+
 	struct FBinding
 	{
 		const TCHAR* Keys;
 		const TCHAR* Action;
 	};
 
-	/** Mirrors the default bindings documented in UHueInputConfig. */
-	static const FBinding Bindings[] =
+	/** Sandbox (first person); mirrors the default bindings documented in UHueInputConfig. */
+	static const FBinding SandboxBindings[] =
 	{
 		{ TEXT("W A S D"),    TEXT("Move") },
 		{ TEXT("Mouse"),      TEXT("Look") },
@@ -250,6 +414,78 @@ namespace HueHUD
 		{ TEXT("R"),          TEXT("Stop and reset the attempt (layout kept)") },
 		{ TEXT("H"),          TEXT("Toggle this help") },
 		{ TEXT("Esc / P"),    TEXT("Pause menu (Esc ends Play-In-Editor: use P)") },
+	};
+
+	/** Instruction Build view (UHueInputConfig::BuildContext). */
+	static const FBinding BuildBindings[] =
+	{
+		{ TEXT("Mouse / W A S D"), TEXT("Move the cell cursor (arrow keys too)") },
+		{ TEXT("Left mouse"),      TEXT("Place the selected module / collect the block") },
+		{ TEXT("Right mouse"),     TEXT("Collect the block back into the tray") },
+		{ TEXT("Q / E"),           TEXT("Rotate the block or the placement preview -90 / +90") },
+		{ TEXT("Z / X"),           TEXT("Delay of the delay block -/+ 0.25 s") },
+		{ TEXT("Wheel, 1-6"),      TEXT("Select tray slot") },
+		{ TEXT("Space"),           TEXT("Run this exercise (the view moves to the stage)") },
+		{ TEXT("R"),               TEXT("Stop and reset the attempt (layout kept)") },
+		{ TEXT("Tab / ]"),         TEXT("Next exercise") },
+		{ TEXT("["),               TEXT("Previous exercise") },
+		{ TEXT("H"),               TEXT("Toggle this help") },
+		{ TEXT("Esc / P"),         TEXT("Pause menu (Esc ends Play-In-Editor: use P)") },
+	};
+
+	/** Instruction Watch view (UHueInputConfig::WatchContext). */
+	static const FBinding WatchBindings[] =
+	{
+		{ TEXT("Space"),   TEXT("Pause / resume the run") },
+		{ TEXT("R"),       TEXT("Stop, reset and go back to the build view") },
+		{ TEXT("Tab / ]"), TEXT("Next exercise (once the run is complete or ended)") },
+		{ TEXT("H"),       TEXT("Toggle this help") },
+		{ TEXT("Esc / P"), TEXT("Pause menu (Esc ends Play-In-Editor: use P)") },
+	};
+
+	/** Watch view once the run is Complete / Ended: Space reruns the board (AExhibitManager::ToggleRun). */
+	static const FBinding WatchFinishedBindings[] =
+	{
+		{ TEXT("Space"),   TEXT("Replay the run from the start") },
+		{ TEXT("R"),       TEXT("Reset and go back to the build view") },
+		{ TEXT("Tab / ]"), TEXT("Next exercise") },
+		{ TEXT("H"),       TEXT("Toggle this help") },
+		{ TEXT("Esc / P"), TEXT("Pause menu (Esc ends Play-In-Editor: use P)") },
+	};
+
+	static const TCHAR* const BuildHelpFooter = TEXT("Modules come from this board's tray; collected blocks go back into it.");
+	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  (dots = pulses)");
+
+	/** Bottom hint bar of the Build view. */
+	static const FBinding BuildHints[] =
+	{
+		{ TEXT("WASD/mouse"), TEXT("select") },
+		{ TEXT("LMB"),        TEXT("place/collect") },
+		{ TEXT("RMB"),        TEXT("collect") },
+		{ TEXT("Q/E"),        TEXT("rotate") },
+		{ TEXT("Z/X"),        TEXT("delay") },
+		{ TEXT("Space"),      TEXT("run") },
+		{ TEXT("R"),          TEXT("reset") },
+		{ TEXT("Tab"),        TEXT("next exercise") },
+		{ TEXT("H"),          TEXT("help") },
+	};
+
+	/** Bottom hint bar of the Watch view. */
+	static const FBinding WatchHints[] =
+	{
+		{ TEXT("Space"), TEXT("pause/resume") },
+		{ TEXT("R"),     TEXT("back to build") },
+		{ TEXT("Tab"),   TEXT("next exercise (after finishing)") },
+		{ TEXT("H"),     TEXT("help") },
+	};
+
+	/** Bottom hint bar of the Watch view once the run is Complete / Ended. */
+	static const FBinding WatchFinishedHints[] =
+	{
+		{ TEXT("Space"), TEXT("replay") },
+		{ TEXT("R"),     TEXT("back to build") },
+		{ TEXT("Tab"),   TEXT("next exercise") },
+		{ TEXT("H"),     TEXT("help") },
 	};
 }
 
@@ -266,21 +502,35 @@ void AHueboxHUD::DrawHUD()
 
 	UIScale = FMath::Clamp(Canvas->ClipY / 1080.f, 0.75f, 2.f);
 	LeftColumnBottom = HueHUD::Margin * UIScale;
+	HintBarTop = Canvas->ClipY - HueHUD::Margin * UIScale;
+	HintBarRight = 0.f;
 
-	AHueboxCharacter* Character = Cast<AHueboxCharacter>(GetOwningPawn());
+	// Raw pointers below are frame locals: looked up every DrawHUD, never stored.
+	APawn* Pawn = GetOwningPawn();
+	const EHudContext Context = ResolveContext(Pawn);
+	const UHueBuildToolComponent* Tool = Pawn ? Pawn->FindComponentByClass<UHueBuildToolComponent>() : nullptr;
 	AExhibitManager* Manager = AExhibitManager::Get(this);
+	const EHueRunState RunState = Manager ? Manager->GetState() : EHueRunState::Build;
+	bRunFinished = RunState == EHueRunState::Complete || RunState == EHueRunState::Ended;
 
-	DrawBoardPanel(Character, Manager);
-	DrawFeedback(Manager);
+	DrawBoardPanel(Pawn, Manager, Context);
 
-	if (Character)
+	switch (Context)
 	{
-		DrawTargetPanel(Character);
-		DrawHotbar(Character);
+	case EHudContext::Sandbox:
+	{
+		const AHueboxCharacter* Character = CastChecked<AHueboxCharacter>(Pawn);
+		DrawFeedback(Manager);
+
+		if (Tool)
+		{
+			DrawTargetPanel(Tool, Context);
+			DrawHotbar(Tool);
+		}
 
 		if (Character->IsHelpVisible())
 		{
-			DrawHelp();
+			DrawHelp(Context);
 		}
 		else
 		{
@@ -291,20 +541,115 @@ void AHueboxHUD::DrawHUD()
 				Canvas->ClipY - HueHUD::Margin * UIScale - Size.Y - 2.f * PadPx, HueHUD::DimColor, UIScale);
 		}
 
-		DrawCrosshairAndPrompt(Character);
+		if (Tool)
+		{
+			DrawCrosshairAndPrompt(Tool, Pawn);
+		}
 
 		if (Character->IsPauseMenuOpen())
 		{
 			DrawPauseOverlay();
 		}
+		break;
+	}
+
+	case EHudContext::Build:
+	case EHudContext::Watch:
+	{
+		const AHueBuilderPawn* Builder = CastChecked<AHueBuilderPawn>(Pawn);
+		const bool bBuildView = Context == EHudContext::Build;
+
+		// Left column: board panel, (tray), feedback.
+		if (bBuildView && Tool)
+		{
+			DrawTrayPanel(Tool);
+		}
+		DrawFeedback(Manager);
+
+		// The hint bar goes first: prompt, help and minimap are placed relative to it.
+		DrawHintBar(Context);
+
+		if (bBuildView)
+		{
+			if (Tool)
+			{
+				DrawTargetPanel(Tool, Context);
+				DrawBuildPrompt(Tool, Pawn);
+			}
+		}
+		else
+		{
+			DrawMinimap(ResolveBoard(Pawn, Manager));
+			DrawRunBanner(Manager);
+		}
+
+		if (Builder->IsHelpVisible())
+		{
+			DrawHelp(Context);
+		}
+
+		if (Builder->IsPauseMenuOpen())
+		{
+			DrawPauseOverlay();
+		}
+		break;
+	}
+
+	case EHudContext::None:
+	default:
+		DrawFeedback(Manager);
+		break;
 	}
 }
 
-// ---- Crosshair ----------------------------------------------------------------------------------------------
-
-void AHueboxHUD::DrawCrosshairAndPrompt(AHueboxCharacter* Character)
+AHueboxHUD::EHudContext AHueboxHUD::ResolveContext(const APawn* Pawn)
 {
-	if (!Character)
+	if (const AHueBuilderPawn* Builder = Cast<AHueBuilderPawn>(Pawn))
+	{
+		return Builder->GetViewMode() == EHueViewMode::Watch ? EHudContext::Watch : EHudContext::Build;
+	}
+	if (Pawn && Pawn->IsA<AHueboxCharacter>())
+	{
+		return EHudContext::Sandbox;
+	}
+	return EHudContext::None;
+}
+
+AHueBoard* AHueboxHUD::ResolveBoard(const APawn* Pawn, const AExhibitManager* Manager) const
+{
+	const AHueBuilderPawn* Builder = Cast<AHueBuilderPawn>(Pawn);
+
+	AHueBoard* Board = nullptr;
+	if (Manager)
+	{
+		// While a run exists the panels follow the running board; in Build they follow the player.
+		if (Manager->GetState() != EHueRunState::Build)
+		{
+			Board = Manager->GetActiveBoard();
+		}
+		// The builder knows its board exactly (also while the camera still glides to it).
+		if (!Board && Builder)
+		{
+			Board = Builder->GetFocusedBoard();
+		}
+		if (!Board && Pawn)
+		{
+			Board = Manager->FindBoardNear(Pawn->GetActorLocation());
+		}
+	}
+	else if (Builder)
+	{
+		Board = Builder->GetFocusedBoard();
+	}
+
+	return IsValid(Board) ? Board : nullptr;
+}
+
+// ---- Crosshair (Sandbox) ------------------------------------------------------------------------------------
+
+void AHueboxHUD::DrawCrosshairAndPrompt(const UHueBuildToolComponent* Tool, APawn* Pawn)
+{
+	if (!Tool)
 	{
 		return;
 	}
@@ -312,7 +657,7 @@ void AHueboxHUD::DrawCrosshairAndPrompt(AHueboxCharacter* Character)
 	const float S = UIScale;
 	const float CX = Canvas->ClipX * 0.5f;
 	const float CY = Canvas->ClipY * 0.5f;
-	const FHueInteractionTarget& Target = Character->GetTarget();
+	const FHueInteractionTarget& Target = Tool->GetTarget();
 
 	FLinearColor Color(1.f, 1.f, 1.f, 0.85f);
 	FString Prompt;
@@ -323,7 +668,7 @@ void AHueboxHUD::DrawCrosshairAndPrompt(AHueboxCharacter* Character)
 		if (APulseBlock* Block = Target.Block.Get())
 		{
 			Color = HueHUD::AmberColor;
-			Prompt = IHueInteractable::Execute_GetInteractPrompt(Block, Character);
+			Prompt = IHueInteractable::Execute_GetInteractPrompt(Block, Pawn);
 		}
 		break;
 
@@ -331,19 +676,19 @@ void AHueboxHUD::DrawCrosshairAndPrompt(AHueboxCharacter* Character)
 		if (AHueModulePickup* Pickup = Target.Pickup.Get())
 		{
 			Color = HueHUD::AmberColor;
-			Prompt = IHueInteractable::Execute_GetInteractPrompt(Pickup, Character);
+			Prompt = IHueInteractable::Execute_GetInteractPrompt(Pickup, Pawn);
 		}
 		break;
 
 	case EHueTargetKind::Cell:
 	{
-		const UHueInventoryComponent* Inventory = Character->GetInventory();
+		const UHueInventoryComponent* Inventory = Tool->GetInventory();
 		const EHueModuleType Selected = Inventory ? Inventory->GetSelectedType() : EHueModuleType::None;
 		if (Target.bCanPlace)
 		{
 			Color = HueHUD::GoodColor;
 			Prompt = FString::Printf(TEXT("LMB  Place %s (facing %s)"), HueModule::DisplayName(Selected),
-				HueDir::ToString(Character->GetPreviewFacing()));
+				HueDir::ToString(Tool->GetPreviewFacing()));
 		}
 		else if (Selected == EHueModuleType::None)
 		{
@@ -384,35 +729,24 @@ void AHueboxHUD::DrawCrosshairAndPrompt(AHueboxCharacter* Character)
 
 // ---- Board / objectives -------------------------------------------------------------------------------------
 
-void AHueboxHUD::DrawBoardPanel(AHueboxCharacter* Character, AExhibitManager* Manager)
+void AHueboxHUD::DrawBoardPanel(const APawn* Pawn, AExhibitManager* Manager, EHudContext Context)
 {
 	const float S = UIScale;
 	const float X = HueHUD::Margin * S;
 	const float Y = HueHUD::Margin * S;
 	const float ContentWidth = 440.f * S;
+	const bool bInstruction = Context == EHudContext::Build || Context == EHudContext::Watch;
 
-	EHueRunState State = EHueRunState::Build;
-	AHueBoard* Board = nullptr;
-	if (Manager)
-	{
-		State = Manager->GetState();
-		// While a run exists the panel follows the running board; in Build it follows the player.
-		if (State != EHueRunState::Build)
-		{
-			Board = Manager->GetActiveBoard();
-		}
-		if (!Board && Character)
-		{
-			Board = Manager->FindBoardNear(Character->GetActorLocation());
-		}
-	}
+	const EHueRunState State = Manager ? Manager->GetState() : EHueRunState::Build;
+	AHueBoard* Board = ResolveBoard(Pawn, Manager);
 
 	TArray<HueHUD::FLine> Lines;
 
-	if (!IsValid(Board))
+	if (!Board)
 	{
 		HueHUD::AddLine(Lines, TEXT("Huebox - prototype table"), HueHUD::AmberColor, true);
-		HueHUD::AddLine(Lines, TEXT("Walk up to an exercise board to read its brief."), HueHUD::TextColor);
+		HueHUD::AddLine(Lines, bInstruction ? TEXT("Preparing the exercise boards...") : TEXT("Walk up to an exercise board to read its brief."),
+			HueHUD::TextColor);
 		const FVector2f Size = HueHUD::DrawPanel(*this, Lines, X, Y, S, ContentWidth, false);
 		LeftColumnBottom = Y + Size.Y;
 		return;
@@ -449,9 +783,21 @@ void AHueboxHUD::DrawBoardPanel(AHueboxCharacter* Character, AExhibitManager* Ma
 		break;
 	}
 
+	// Instruction progression: which exercise of how many (boards are kept in progression order).
+	if (Context == EHudContext::Build && Manager)
+	{
+		const int32 Index = Manager->GetBoards().IndexOfByKey(Board);
+		const int32 Count = Manager->GetBoards().Num();
+		if (Index != INDEX_NONE && Count > 1)
+		{
+			HueHUD::AddLine(Lines, FString::Printf(TEXT("Exercise %d of %d    Tab / ]: next    [: previous"), Index + 1, Count), HueHUD::DimColor);
+		}
+	}
+
 	if (State == EHueRunState::Ended || State == EHueRunState::Complete)
 	{
-		HueHUD::AddLine(Lines, TEXT("Walk to the next board to continue"), HueHUD::InfoColor);
+		HueHUD::AddLine(Lines, bInstruction ? TEXT("Tab: next exercise    R: back to build") : TEXT("Walk to the next board to continue"),
+			HueHUD::InfoColor);
 	}
 
 	if (State == EHueRunState::Running || State == EHueRunState::Paused)
@@ -462,8 +808,8 @@ void AHueboxHUD::DrawBoardPanel(AHueboxCharacter* Character, AExhibitManager* Ma
 		}
 	}
 
-	// Brief --------------------------------------------------------------------------------------------------
-	if (!Board->GetBrief().IsEmpty())
+	// Brief (the Watch view is about the performance; the brief belongs to building) -------------------------
+	if (Context != EHudContext::Watch && !Board->GetBrief().IsEmpty())
 	{
 		HueHUD::AddWrapped(*this, Lines, Board->GetBrief(), HueHUD::DimColor, ContentWidth, S);
 	}
@@ -556,11 +902,11 @@ void AHueboxHUD::DrawFeedback(AExhibitManager* Manager)
 	}
 }
 
-// ---- Hotbar -------------------------------------------------------------------------------------------------
+// ---- Hotbar (Sandbox) ---------------------------------------------------------------------------------------
 
-void AHueboxHUD::DrawHotbar(AHueboxCharacter* Character)
+void AHueboxHUD::DrawHotbar(const UHueBuildToolComponent* Tool)
 {
-	const UHueInventoryComponent* Inventory = Character ? Character->GetInventory() : nullptr;
+	const UHueInventoryComponent* Inventory = Tool ? Tool->GetInventory() : nullptr;
 	if (!Inventory)
 	{
 		return;
@@ -603,8 +949,8 @@ void AHueboxHUD::DrawHotbar(AHueboxCharacter* Character)
 
 		if (!Slot.IsEmpty())
 		{
-			// Colour swatch matching the placeholder block body.
-			DrawRect(HueHUD::WithAlpha(HueModule::BodyColor(Slot.Type), Alpha), SX + SlotW - 18.f * S, Y0 + 6.f * S, 12.f * S, 12.f * S);
+			// Colour swatch matching the floor pickups (placed modules are all white, so not their body colour).
+			DrawRect(HueHUD::WithAlpha(HueModule::AccentColor(Slot.Type), Alpha), SX + SlotW - 18.f * S, Y0 + 6.f * S, 12.f * S, 12.f * S);
 
 			const FString Name = HueModule::ShortName(Slot.Type);
 			const FVector2f NameSize = HueHUD::Measure(*this, Name, Font, S);
@@ -624,7 +970,7 @@ void AHueboxHUD::DrawHotbar(AHueboxCharacter* Character)
 
 	// Selection / facing line above the slots.
 	const EHueModuleType Selected = Inventory->GetSelectedType();
-	const TCHAR* FacingName = HueDir::ToString(Character->GetPreviewFacing());
+	const TCHAR* FacingName = HueDir::ToString(Tool->GetPreviewFacing());
 	FString Info;
 	FLinearColor InfoColorValue = HueHUD::TextColor;
 	if (!bEditing)
@@ -639,7 +985,7 @@ void AHueboxHUD::DrawHotbar(AHueboxCharacter* Character)
 	else
 	{
 		// Only send the player looking for supplies when the tray really is empty.
-		const bool bHasModules = Slots.ContainsByPredicate([](const FHueInventorySlot& Each) { return !Each.IsEmpty(); });
+		const bool bHasModules = HueHUD::HasAnyModule(*Inventory);
 		Info = bHasModules
 			? FString::Printf(TEXT("Slot empty - select a module (1-6 / wheel)    Q/E rotate: facing %s"), FacingName)
 			: FString::Printf(TEXT("Empty slot - collect modules with LMB    Q/E rotate: facing %s"), FacingName);
@@ -651,16 +997,136 @@ void AHueboxHUD::DrawHotbar(AHueboxCharacter* Character)
 	DrawLabel(Info, (Canvas->ClipX - InfoSize.X) * 0.5f - PadPx, Y0 - InfoSize.Y - 2.f * PadPx - 6.f * S, InfoColorValue, S);
 }
 
-// ---- Target -------------------------------------------------------------------------------------------------
+// ---- Tray (Build view) --------------------------------------------------------------------------------------
 
-void AHueboxHUD::DrawTargetPanel(AHueboxCharacter* Character)
+void AHueboxHUD::DrawTrayPanel(const UHueBuildToolComponent* Tool)
 {
-	if (!Character)
+	const UHueInventoryComponent* Tray = Tool ? Tool->GetInventory() : nullptr;
+	if (!Tray)
 	{
 		return;
 	}
 
-	const FHueInteractionTarget& Target = Character->GetTarget();
+	const float S = UIScale;
+	const float PadPx = HueHUD::Pad * S;
+	const float GapPx = HueHUD::LineGap * S;
+	const float X = HueHUD::Margin * S;
+	const float Y = LeftColumnBottom + HueHUD::PanelGap * S;
+	UFont* Font = HueHUD::BodyFont();
+	UFont* Heading = HueHUD::HeadingFont();
+
+	// Same rule as the hotbar: outside Build the tray stays readable but dimmed.
+	const bool bEditing = Tool->IsEditingAllowed();
+	const float Alpha = bEditing ? 1.f : 0.5f;
+
+	const TArray<FHueInventorySlot>& Slots = Tray->GetSlots();
+	const int32 NumSlots = FMath::Max(Slots.Num(), Tray->GetNumSlots());
+	const bool bHasModules = HueHUD::HasAnyModule(*Tray);
+
+	const FString Title = TEXT("Tray (wheel / 1-6)");
+	const FString EmptyText = TEXT("Tray empty - all modules placed");
+	const FString Footer = bEditing
+		? FString::Printf(TEXT("Facing: %s  (Q/E)"), HueDir::ToString(Tool->GetPreviewFacing()))
+		: FString(TEXT("Editing locked - press R to reset"));
+
+	const FVector2f TitleSize = HueHUD::Measure(*this, Title, Heading, S);
+	const FVector2f FooterSize = HueHUD::Measure(*this, Footer, Font, S);
+	const float LineH = HueHUD::Measure(*this, TEXT("Ag"), Font, S).Y;
+	const float RowH = LineH + 6.f * S;
+	const float IconSize = LineH;
+
+	// Row columns: slot number | letter tile | short name | count (right-aligned).
+	const float NumberW = HueHUD::Measure(*this, TEXT("8"), Font, S).X + 10.f * S;
+	const float IconGap = 8.f * S;
+	float NameW = 0.f;
+	for (const FHueInventorySlot& Slot : Slots)
+	{
+		if (!Slot.IsEmpty())
+		{
+			NameW = FMath::Max(NameW, static_cast<float>(HueHUD::Measure(*this, HueModule::ShortName(Slot.Type), Font, S).X));
+		}
+	}
+	const float CountW = HueHUD::Measure(*this, TEXT("x12"), Font, S).X;
+	const float RowW = NumberW + IconSize + IconGap + NameW + 16.f * S + CountW;
+
+	float ContentW = FMath::Max3(static_cast<float>(TitleSize.X), static_cast<float>(FooterSize.X), RowW);
+	ContentW = FMath::Max(ContentW, 220.f * S);
+	if (!bHasModules)
+	{
+		ContentW = FMath::Max(ContentW, static_cast<float>(HueHUD::Measure(*this, EmptyText, Font, S).X));
+	}
+
+	const int32 NumRows = bHasModules ? NumSlots : 1;
+	const float BoxW = ContentW + 2.f * PadPx;
+	const float BoxH = 2.f * PadPx + TitleSize.Y + 2.f * GapPx + NumRows * RowH + 2.f * GapPx + FooterSize.Y;
+	const float ContentX = X + PadPx;
+
+	DrawRect(HueHUD::Backing, X, Y, BoxW, BoxH);
+	DrawText(Title, HueHUD::WithAlpha(HueHUD::AmberColor, Alpha), ContentX, Y + PadPx, Heading, S);
+
+	float RowY = Y + PadPx + TitleSize.Y + 2.f * GapPx;
+	if (!bHasModules)
+	{
+		DrawText(EmptyText, HueHUD::WithAlpha(HueHUD::DimColor, Alpha), ContentX, RowY + (RowH - LineH) * 0.5f, Font, S);
+		RowY += RowH;
+	}
+	else
+	{
+		const int32 SelectedIndex = Tray->GetSelectedIndex();
+		for (int32 Index = 0; Index < NumSlots; ++Index)
+		{
+			const FHueInventorySlot Slot = Slots.IsValidIndex(Index) ? Slots[Index] : FHueInventorySlot();
+			const bool bSelected = Index == SelectedIndex;
+			const bool bFilled = !Slot.IsEmpty();
+			const float TextY = RowY + (RowH - LineH) * 0.5f;
+
+			if (bSelected)
+			{
+				const float HighlightX = ContentX - 4.f * S;
+				const float HighlightW = ContentW + 8.f * S;
+				DrawRect(HueHUD::WithAlpha(HueHUD::AmberColor, 0.18f * Alpha), HighlightX, RowY, HighlightW, RowH);
+				HueHUD::DrawFrame(*this, HighlightX, RowY, HighlightW, RowH, FMath::Max(1.f, 1.5f * S), HueHUD::WithAlpha(HueHUD::AmberColor, Alpha));
+			}
+
+			DrawText(FString::FromInt(Index + 1), HueHUD::WithAlpha(bSelected ? HueHUD::AmberColor : HueHUD::DimColor, Alpha), ContentX, TextY, Font, S);
+
+			const float IconX = ContentX + NumberW;
+			const float NameX = IconX + IconSize + IconGap;
+			if (bFilled)
+			{
+				// Same white tile + letter as the module on the board and on the minimap.
+				HueHUD::DrawLetterTile(*this, IconX, RowY + (RowH - IconSize) * 0.5f, IconSize, HueHUD::WithAlpha(HueHUD::TileWhite, Alpha),
+					HueHUD::ModuleLetter(Slot.Type), HueHUD::WithAlpha(HueHUD::TileInk, Alpha));
+				DrawText(HueModule::ShortName(Slot.Type), HueHUD::WithAlpha(bSelected ? HueHUD::AmberColor : HueHUD::TextColor, Alpha), NameX, TextY, Font, S);
+
+				const FString CountText = FString::Printf(TEXT("x%d"), Slot.Count);
+				const float CountX = ContentX + ContentW - HueHUD::Measure(*this, CountText, Font, S).X;
+				DrawText(CountText, HueHUD::WithAlpha(HueHUD::AmberColor, Alpha), CountX, TextY, Font, S);
+			}
+			else
+			{
+				// Empty slots stay listed (dimmed) so the 1-6 keys keep matching the rows.
+				DrawText(TEXT("-"), HueHUD::WithAlpha(HueHUD::DimColor, Alpha), NameX, TextY, Font, S);
+			}
+			RowY += RowH;
+		}
+	}
+
+	DrawText(Footer, bEditing ? HueHUD::TextColor : HueHUD::WarnColor, ContentX, RowY + 2.f * GapPx, Font, S);
+	LeftColumnBottom = Y + BoxH;
+}
+
+// ---- Target -------------------------------------------------------------------------------------------------
+
+void AHueboxHUD::DrawTargetPanel(const UHueBuildToolComponent* Tool, EHudContext Context)
+{
+	if (!Tool)
+	{
+		return;
+	}
+
+	const FHueInteractionTarget& Target = Tool->GetTarget();
+	const bool bInstruction = Context != EHudContext::Sandbox;
 	const float S = UIScale;
 	const float Right = Canvas->ClipX - HueHUD::Margin * S;
 	const float Top = HueHUD::Margin * S;
@@ -691,8 +1157,7 @@ void AHueboxHUD::DrawTargetPanel(AHueboxCharacter* Character)
 		HueHUD::AddLine(Lines, FString::Printf(TEXT("Facing %s"), HueDir::ToString(Block->GetFacing())), HueHUD::DimColor);
 		HueHUD::AddWrapped(*this, Lines, HueHUD::PortsText(*Block), HueHUD::DimColor, Width, S);
 
-		const AExhibitManager* Manager = AExhibitManager::Get(this);
-		const bool bCanEdit = !Manager || Manager->IsEditingAllowed();
+		const bool bCanEdit = Tool->IsEditingAllowed();
 
 		if (const AHueDelayBlock* Delay = Cast<AHueDelayBlock>(Block))
 		{
@@ -703,7 +1168,8 @@ void AHueboxHUD::DrawTargetPanel(AHueboxCharacter* Character)
 
 		if (Block->IsRemovable())
 		{
-			HueHUD::AddLine(Lines, bCanEdit ? TEXT("Removable    LMB collect    Q/E rotate") : TEXT("Removable - press R to reset before editing"),
+			const TCHAR* EditHint = bInstruction ? TEXT("Removable    LMB / RMB collect    Q/E rotate") : TEXT("Removable    LMB collect    Q/E rotate");
+			HueHUD::AddLine(Lines, bCanEdit ? EditHint : TEXT("Removable - press R to reset before editing"),
 				bCanEdit ? HueHUD::GoodColor : HueHUD::DimColor);
 		}
 		else
@@ -728,12 +1194,17 @@ void AHueboxHUD::DrawTargetPanel(AHueboxCharacter* Character)
 	case EHueTargetKind::Cell:
 	{
 		HueHUD::AddLine(Lines, FString::Printf(TEXT("Empty cell (%d,%d)"), Target.Cell.X, Target.Cell.Y), HueHUD::AmberColor, true);
-		const UHueInventoryComponent* Inventory = Character->GetInventory();
+		const UHueInventoryComponent* Inventory = Tool->GetInventory();
 		const EHueModuleType Selected = Inventory ? Inventory->GetSelectedType() : EHueModuleType::None;
 		if (Target.bCanPlace)
 		{
 			HueHUD::AddLine(Lines, FString::Printf(TEXT("LMB  place %s facing %s"), HueModule::DisplayName(Selected),
-				HueDir::ToString(Character->GetPreviewFacing())), HueHUD::GoodColor);
+				HueDir::ToString(Tool->GetPreviewFacing())), HueHUD::GoodColor);
+		}
+		else if (bInstruction && Selected == EHueModuleType::None && Inventory && !HueHUD::HasAnyModule(*Inventory))
+		{
+			HueHUD::AddWrapped(*this, Lines, TEXT("Tray empty - all modules placed. RMB on a placed module collects it back."),
+				HueHUD::DimColor, Width, S);
 		}
 		else
 		{
@@ -751,23 +1222,365 @@ void AHueboxHUD::DrawTargetPanel(AHueboxCharacter* Character)
 	HueHUD::DrawPanel(*this, Lines, Right, Top, S, 240.f * S, /*bAlignRight*/ true);
 }
 
+// ---- Build view prompt + hint bar ---------------------------------------------------------------------------
+
+void AHueboxHUD::DrawBuildPrompt(const UHueBuildToolComponent* Tool, APawn* Pawn)
+{
+	if (!Tool)
+	{
+		return;
+	}
+
+	const FHueInteractionTarget& Target = Tool->GetTarget();
+	const UHueInventoryComponent* Tray = Tool->GetInventory();
+	const EHueModuleType Selected = Tray ? Tray->GetSelectedType() : EHueModuleType::None;
+
+	FString Prompt;
+	FLinearColor Color = HueHUD::TextColor;
+
+	switch (Target.Kind)
+	{
+	case EHueTargetKind::Block:
+		if (APulseBlock* Block = Target.Block.Get())
+		{
+			if (Block->IsRemovable() && Tool->IsEditingAllowed())
+			{
+				Prompt = FString::Printf(TEXT("LMB / RMB  Collect %s   |   Q/E  Rotate"), *Block->GetDisplayName());
+				if (Block->IsA<AHueDelayBlock>())
+				{
+					Prompt += TEXT("   |   Z/X  Delay");
+				}
+				Color = HueHUD::AmberColor;
+			}
+			else
+			{
+				// Fixed unit or editing locked: the block's own prompt says why.
+				Prompt = IHueInteractable::Execute_GetInteractPrompt(Block, Pawn);
+				Color = HueHUD::DimColor;
+			}
+		}
+		break;
+
+	case EHueTargetKind::Pickup:
+		if (AHueModulePickup* Pickup = Target.Pickup.Get())
+		{
+			Prompt = IHueInteractable::Execute_GetInteractPrompt(Pickup, Pawn);
+		}
+		break;
+
+	case EHueTargetKind::Cell:
+		if (Target.bCanPlace)
+		{
+			Prompt = FString::Printf(TEXT("LMB  Place %s (facing %s)   |   Q/E  Rotate"), HueModule::DisplayName(Selected),
+				HueDir::ToString(Tool->GetPreviewFacing()));
+			Color = HueHUD::GoodColor;
+		}
+		else if (Selected == EHueModuleType::None)
+		{
+			// Nothing selected is a hint, not an error.
+			Prompt = (Tray && !HueHUD::HasAnyModule(*Tray)) ? FString(TEXT("Tray empty - all modules placed (RMB collects one back)")) : Target.Reason;
+			Color = HueHUD::DimColor;
+		}
+		else
+		{
+			Prompt = TEXT("x  ") + Target.Reason;
+			Color = HueHUD::BadColor;
+		}
+		break;
+
+	case EHueTargetKind::None:
+	default:
+		break;
+	}
+
+	if (Prompt.IsEmpty())
+	{
+		return;
+	}
+
+	const float S = UIScale;
+	const float PadPx = HueHUD::Pad * S;
+	const FVector2f Size = HueHUD::Measure(*this, Prompt, HueHUD::BodyFont(), S);
+	const float Y = HintBarTop - HueHUD::PanelGap * S - Size.Y - 2.f * PadPx;
+	DrawLabel(Prompt, (Canvas->ClipX - Size.X) * 0.5f - PadPx, Y, Color, S);
+}
+
+void AHueboxHUD::DrawHintBar(EHudContext Context)
+{
+	TConstArrayView<HueHUD::FBinding> Hints = MakeArrayView(HueHUD::BuildHints);
+	if (Context == EHudContext::Watch)
+	{
+		Hints = bRunFinished ? MakeArrayView(HueHUD::WatchFinishedHints) : MakeArrayView(HueHUD::WatchHints);
+	}
+	if (Hints.Num() == 0)
+	{
+		return;
+	}
+
+	UFont* Font = HueHUD::BodyFont();
+
+	// Bar content width at a text scale (the gaps scale with it); OutHeight = tallest entry.
+	auto MeasureBar = [this, Hints, Font](float Scale, float& OutHeight)
+	{
+		float Width = 0.f;
+		OutHeight = 0.f;
+		for (int32 Index = 0; Index < Hints.Num(); ++Index)
+		{
+			const FVector2f KeySize = HueHUD::Measure(*this, Hints[Index].Keys, Font, Scale);
+			const FVector2f ActionSize = HueHUD::Measure(*this, Hints[Index].Action, Font, Scale);
+			Width += KeySize.X + HueHUD::HintKeyGap * Scale + ActionSize.X;
+			if (Index > 0)
+			{
+				Width += HueHUD::HintPairGap * Scale;
+			}
+			OutHeight = FMath::Max(OutHeight, static_cast<float>(FMath::Max(KeySize.Y, ActionSize.Y)));
+		}
+		return Width;
+	};
+
+	const float S = UIScale;
+	float Scale = S;
+	float Height = 0.f;
+	float Width = MeasureBar(Scale, Height);
+
+	// Narrow window: shrink the text instead of clipping the bar.
+	const float Available = Canvas->ClipX - 2.f * (HueHUD::Margin + HueHUD::Pad) * S;
+	if (Width > Available && Width > 0.f && Available > 0.f)
+	{
+		Scale *= Available / Width;
+		Width = MeasureBar(Scale, Height);
+	}
+
+	const float PadPx = HueHUD::Pad * S;
+	const float BoxW = Width + 2.f * PadPx;
+	const float BoxH = Height + 2.f * PadPx;
+	const float Left = (Canvas->ClipX - BoxW) * 0.5f;
+	const float Top = Canvas->ClipY - HueHUD::Margin * S - BoxH;
+
+	DrawRect(HueHUD::Backing, Left, Top, BoxW, BoxH);
+
+	float CursorX = Left + PadPx;
+	for (const HueHUD::FBinding& Hint : Hints)
+	{
+		DrawText(Hint.Keys, HueHUD::AmberColor, CursorX, Top + PadPx, Font, Scale);
+		CursorX += HueHUD::Measure(*this, Hint.Keys, Font, Scale).X + HueHUD::HintKeyGap * Scale;
+		DrawText(Hint.Action, HueHUD::TextColor, CursorX, Top + PadPx, Font, Scale);
+		CursorX += HueHUD::Measure(*this, Hint.Action, Font, Scale).X + HueHUD::HintPairGap * Scale;
+	}
+
+	HintBarTop = Top;
+	HintBarRight = Left + BoxW;
+}
+
+// ---- Minimap (Watch view) -----------------------------------------------------------------------------------
+
+void AHueboxHUD::DrawMinimap(const AHueBoard* Board)
+{
+	if (!IsValid(Board))
+	{
+		return;
+	}
+
+	const FIntPoint Grid = Board->GetGridSize();
+	if (Grid.X <= 0 || Grid.Y <= 0)
+	{
+		return;
+	}
+
+	const float S = UIScale;
+	const float PadPx = HueHUD::Pad * S;
+	const float GapPx = HueHUD::LineGap * S;
+	const float MapSize = HueHUD::MinimapSize * S;
+	const float CellPx = MapSize / static_cast<float>(FMath::Max(Grid.X, Grid.Y));
+	const float GridW = CellPx * Grid.X;
+	const float GridH = CellPx * Grid.Y;
+	const float LineW = FMath::Max(1.f, S);
+	UFont* Font = HueHUD::BodyFont();
+	UFont* Heading = HueHUD::HeadingFont();
+
+	// Pulses only exist for the board that is running right now.
+	const UPulseSubsystem* Sim = UPulseSubsystem::Get(this);
+	const bool bLive = Sim && Sim->IsRunning() && Sim->GetActiveBoard() == Board;
+
+	const FString Title = TEXT("Board map");
+	const FString Caption = bLive ? FString::Printf(TEXT("t %.2f s"), Sim->GetSimTimeSeconds()) : FString();
+	const FVector2f TitleSize = HueHUD::Measure(*this, Title, Heading, S);
+	const float HeaderH = TitleSize.Y + 2.f * GapPx;
+
+	const float BoxW = MapSize + 2.f * PadPx;
+	const float BoxH = HeaderH + GridH + 2.f * PadPx;
+	const float Right = Canvas->ClipX - HueHUD::Margin * S;
+	const float Left = Right - BoxW;
+	float Bottom = Canvas->ClipY - HueHUD::Margin * S;
+	if (Left < HintBarRight + HueHUD::PanelGap * S)
+	{
+		// Narrow window: the centred hint bar reaches under the map, so stack the map above it.
+		Bottom = HintBarTop - HueHUD::PanelGap * S;
+	}
+	const float Top = Bottom - BoxH;
+
+	DrawRect(HueHUD::Backing, Left, Top, BoxW, BoxH);
+	DrawText(Title, HueHUD::AmberColor, Left + PadPx, Top + PadPx, Heading, S);
+	if (!Caption.IsEmpty())
+	{
+		const FVector2f CaptionSize = HueHUD::Measure(*this, Caption, Font, S);
+		DrawText(Caption, HueHUD::DimColor, Right - PadPx - CaptionSize.X, Top + PadPx + (TitleSize.Y - CaptionSize.Y) * 0.5f, Font, S);
+	}
+
+	// Same picture as the Build view camera: cell (0,0) top-left, +X to the right, +Y (North) downwards, so the
+	// stage (behind the grid's y = 0 edge) is above the map.
+	const float GridLeft = Left + PadPx + (MapSize - GridW) * 0.5f;
+	const float GridTop = Top + PadPx + HeaderH;
+	DrawRect(HueHUD::MapFloor, GridLeft, GridTop, GridW, GridH);
+	for (int32 Column = 0; Column <= Grid.X; ++Column)
+	{
+		DrawRect(HueHUD::MapLine, GridLeft + Column * CellPx - LineW * 0.5f, GridTop, LineW, GridH);
+	}
+	for (int32 Row = 0; Row <= Grid.Y; ++Row)
+	{
+		DrawRect(HueHUD::MapLine, GridLeft, GridTop + Row * CellPx - LineW * 0.5f, GridW, LineW);
+	}
+
+	// Blocks -------------------------------------------------------------------------------------------------
+	const float TileSize = CellPx * HueHUD::MapTileFraction;
+	const float HoldRing = FMath::Max(2.f, 2.f * S);
+	TArray<FHuePort> Ports;
+	Board->ForEachBlock([&](APulseBlock& Block)
+	{
+		const FIntPoint Cell = Block.GetCell();
+		if (!Board->IsInside(Cell))
+		{
+			return;
+		}
+
+		const float CX = GridLeft + (Cell.X + 0.5f) * CellPx;
+		const float CY = GridTop + (Cell.Y + 0.5f) * CellPx;
+		const HueHUD::FMapTile Tile = HueHUD::DescribeMapTile(Block);
+
+		if (Tile.bSolid)
+		{
+			// Barrier: the whole cell filled dark (a wall, not a tile).
+			const float Size = CellPx * 0.92f;
+			DrawRect(Tile.Fill, CX - Size * 0.5f, CY - Size * 0.5f, Size, Size);
+			HueHUD::DrawFrame(*this, CX - Size * 0.5f, CY - Size * 0.5f, Size, Size, LineW, HueHUD::BarrierEdge);
+			return;
+		}
+
+		const float TX = CX - TileSize * 0.5f;
+		const float TY = CY - TileSize * 0.5f;
+		DrawRect(Tile.Fill, TX, TY, TileSize, TileSize);
+
+		Ports.Reset();
+		Block.GetPorts(Ports);
+		for (const FHuePort& Port : Ports)
+		{
+			HueHUD::DrawPortMark(*this, CX, CY, TileSize, Port, Tile.Ink, Tile.Fill);
+		}
+
+		HueHUD::DrawCentredText(*this, Tile.Letter, CX, CY, TileSize * 0.75f, Tile.Ink);
+
+		if (Tile.bHolding)
+		{
+			HueHUD::DrawFrame(*this, TX - HoldRing, TY - HoldRing, TileSize + 2.f * HoldRing, TileSize + 2.f * HoldRing, HoldRing, HueHUD::InfoColor);
+		}
+	});
+
+	// Live pulses --------------------------------------------------------------------------------------------
+	if (!bLive)
+	{
+		return;
+	}
+
+	TArray<FHuePulseSnapshot> Snapshots;
+	Sim->GetPulseSnapshots(Snapshots);
+
+	const float Radius = FMath::Max(4.f * S, CellPx * 0.2f);
+	const float Outline = FMath::Max(1.f, 1.5f * S);
+	for (const FHuePulseSnapshot& Pulse : Snapshots)
+	{
+		// A pulse leaving the board heads for a cell outside the grid; it disappears at the edge.
+		const FVector2D& P = Pulse.CellPosition;
+		if (P.X < -0.5 || P.X > Grid.X - 0.5 || P.Y < -0.5 || P.Y > Grid.Y - 0.5)
+		{
+			continue;
+		}
+
+		const FVector2D Center(GridLeft + (P.X + 0.5) * CellPx, GridTop + (P.Y + 0.5) * CellPx);
+		// Dark rim first so white (N) pulses stay visible on white module tiles.
+		Canvas->K2_DrawPolygon(nullptr, Center, FVector2D(Radius + Outline), HueHUD::CircleSides, HueHUD::TileInk);
+		Canvas->K2_DrawPolygon(nullptr, Center, FVector2D(Radius), HueHUD::CircleSides, HueColor::ToLinear(Pulse.Color));
+		HueHUD::DrawCentredText(*this, HueColor::Label(Pulse.Color), static_cast<float>(Center.X), static_cast<float>(Center.Y),
+			Radius * 1.3f, HueHUD::TileInk);
+	}
+}
+
+void AHueboxHUD::DrawRunBanner(const AExhibitManager* Manager)
+{
+	if (!Manager)
+	{
+		return;
+	}
+
+	const EHueRunState State = Manager->GetState();
+	if (State != EHueRunState::Complete && State != EHueRunState::Ended)
+	{
+		return;
+	}
+
+	TArray<HueHUD::FLine> Lines;
+	if (State == EHueRunState::Complete)
+	{
+		HueHUD::AddLine(Lines, TEXT("Exercise complete!"), HueHUD::GoodColor, true);
+		HueHUD::AddLine(Lines, TEXT("Tab  next exercise    Space  replay    R  back to build"), HueHUD::TextColor);
+	}
+	else
+	{
+		HueHUD::AddLine(Lines, TEXT("Run ended"), HueHUD::BadColor, true);
+		HueHUD::AddLine(Lines, TEXT("R  back to build and adjust    Space  run again    Tab  next exercise"), HueHUD::TextColor);
+	}
+
+	const float S = UIScale;
+	const float BoxW = HueHUD::MeasureLinesWidth(*this, Lines, S) + 2.f * HueHUD::Pad * S;
+	HueHUD::DrawPanel(*this, Lines, (Canvas->ClipX - BoxW) * 0.5f, HueHUD::Margin * S, S, 0.f, false);
+}
+
 // ---- Overlays -----------------------------------------------------------------------------------------------
 
-void AHueboxHUD::DrawHelp()
+void AHueboxHUD::DrawHelp(EHudContext Context)
 {
+	TConstArrayView<HueHUD::FBinding> Bindings = MakeArrayView(HueHUD::SandboxBindings);
+	FString Heading = TEXT("Controls  (H to hide)");
+	FString Footer;
+	switch (Context)
+	{
+	case EHudContext::Build:
+		Bindings = MakeArrayView(HueHUD::BuildBindings);
+		Heading = TEXT("Build view controls  (H to hide)");
+		Footer = HueHUD::BuildHelpFooter;
+		break;
+	case EHudContext::Watch:
+		Bindings = bRunFinished ? MakeArrayView(HueHUD::WatchFinishedBindings) : MakeArrayView(HueHUD::WatchBindings);
+		Heading = TEXT("Watch view controls  (H to hide)");
+		Footer = HueHUD::WatchHelpFooter;
+		break;
+	case EHudContext::Sandbox:
+	case EHudContext::None:
+	default:
+		break;
+	}
+
 	const float S = UIScale;
 	const float PadPx = HueHUD::Pad * S;
 	const float GapPx = HueHUD::LineGap * S;
 	const float ColumnGap = 16.f * S;
 	UFont* Font = HueHUD::BodyFont();
 
-	const FString Heading = TEXT("Controls  (H to hide)");
 	const FVector2f HeadingSize = HueHUD::Measure(*this, Heading, HueHUD::HeadingFont(), S);
 
 	float KeysWidth = 0.f;
 	float ActionWidth = 0.f;
 	float RowHeight = 0.f;
-	for (const HueHUD::FBinding& Binding : HueHUD::Bindings)
+	for (const HueHUD::FBinding& Binding : Bindings)
 	{
 		const FVector2f KeySize = HueHUD::Measure(*this, Binding.Keys, Font, S);
 		const FVector2f ActionSize = HueHUD::Measure(*this, Binding.Action, Font, S);
@@ -776,21 +1589,46 @@ void AHueboxHUD::DrawHelp()
 		RowHeight = FMath::Max(RowHeight, static_cast<float>(FMath::Max(KeySize.Y, ActionSize.Y)));
 	}
 
-	const int32 NumRows = UE_ARRAY_COUNT(HueHUD::Bindings);
-	const float BoxWidth = FMath::Max(static_cast<float>(HeadingSize.X), KeysWidth + ColumnGap + ActionWidth) + 2.f * PadPx;
-	const float BoxHeight = static_cast<float>(HeadingSize.Y) + GapPx * 2.f + NumRows * (RowHeight + GapPx) + 2.f * PadPx;
-	const float Left = Canvas->ClipX - HueHUD::Margin * S - BoxWidth;
-	const float Top = Canvas->ClipY - HueHUD::Margin * S - BoxHeight;
+	const FVector2f FooterSize = Footer.IsEmpty() ? FVector2f::ZeroVector : HueHUD::Measure(*this, Footer, Font, S);
+	const float FooterBlock = Footer.IsEmpty() ? 0.f : static_cast<float>(FooterSize.Y) + GapPx * 2.f;
+
+	const int32 NumRows = Bindings.Num();
+	const float BoxWidth = FMath::Max3(static_cast<float>(HeadingSize.X), KeysWidth + ColumnGap + ActionWidth, static_cast<float>(FooterSize.X)) + 2.f * PadPx;
+	const float BoxHeight = static_cast<float>(HeadingSize.Y) + GapPx * 2.f + NumRows * (RowHeight + GapPx) + FooterBlock + 2.f * PadPx;
+	float Left = Canvas->ClipX - HueHUD::Margin * S - BoxWidth;
+
+	float Top = Canvas->ClipY - HueHUD::Margin * S - BoxHeight;
+	if (Context == EHudContext::Build)
+	{
+		// Above the key hint bar (the target panel owns the top-right corner).
+		Top = HintBarTop - HueHUD::PanelGap * S - BoxHeight;
+	}
+	else if (Context == EHudContext::Watch)
+	{
+		// Bottom-left, over the near floor: the minimap owns the bottom-right corner, and the top band of the stage
+		// shot holds the zone label above the backdrop ("STOP HERE"). Above the centred hint bar if they would meet.
+		Left = HueHUD::Margin * S;
+		const float HintBarLeft = Canvas->ClipX - HintBarRight;
+		if (HintBarRight > 0.f && Left + BoxWidth + HueHUD::PanelGap * S > HintBarLeft)
+		{
+			Top = HintBarTop - HueHUD::PanelGap * S - BoxHeight;
+		}
+	}
 
 	DrawRect(HueHUD::Backing, Left, Top, BoxWidth, BoxHeight);
 	DrawText(Heading, HueHUD::AmberColor, Left + PadPx, Top + PadPx, HueHUD::HeadingFont(), S);
 
 	float RowY = Top + PadPx + static_cast<float>(HeadingSize.Y) + GapPx * 2.f;
-	for (const HueHUD::FBinding& Binding : HueHUD::Bindings)
+	for (const HueHUD::FBinding& Binding : Bindings)
 	{
 		DrawText(Binding.Keys, HueHUD::AmberColor, Left + PadPx, RowY, Font, S);
 		DrawText(Binding.Action, HueHUD::TextColor, Left + PadPx + KeysWidth + ColumnGap, RowY, Font, S);
 		RowY += RowHeight + GapPx;
+	}
+
+	if (!Footer.IsEmpty())
+	{
+		DrawText(Footer, HueHUD::DimColor, Left + PadPx, RowY + GapPx, Font, S);
 	}
 }
 

@@ -11,8 +11,8 @@ class UTextRenderComponent;
 class UMaterialInstanceDynamic;
 
 /**
- * A stack of modules lying in the world (supply tray item, or something the player dropped with G).
- * Interact (LMB) moves as many as fit into the inventory; the pickup disappears when empty.
+ * A stack of modules lying in the world (Sandbox supply item, or something the player dropped with G).
+ * Interact (LMB) moves as many as fit into the interactor's inventory; the pickup disappears when empty.
  */
 UCLASS()
 class HUEBOX_API AHueModulePickup : public AActor, public IHueInteractable
@@ -28,8 +28,9 @@ public:
 	EHueModuleType GetModuleType() const { return Type; }
 	int32 GetCount() const { return Count; }
 
-	virtual FString GetInteractPrompt_Implementation(AHueboxCharacter* Interactor) const override;
-	virtual bool Interact_Implementation(AHueboxCharacter* Interactor) override;
+	virtual FString GetInteractPrompt_Implementation(AActor* Interactor) const override;
+	/** Collects into the interactor's build tool inventory (UHueBuildToolComponent::TryCollectPickup). */
+	virtual bool Interact_Implementation(AActor* Interactor) override;
 
 protected:
 	virtual void BeginPlay() override;

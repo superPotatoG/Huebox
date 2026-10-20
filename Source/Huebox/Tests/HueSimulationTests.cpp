@@ -1,6 +1,8 @@
 // Huebox automation tests: direction / colour math, the inventory rules, the deterministic pulse simulation with
 // exact logical timings, ordered objectives, the three Level 1 tutorial exercises end to end, and object lifetime
-// (weak references to removed blocks, world teardown + garbage collection).
+// (weak references to removed blocks, world teardown + garbage collection). The dual-view pieces are covered too:
+// build-camera height, grid cursor and stage-camera math, minimap pulse snapshots, and the build tool placing from /
+// collecting into a board tray, with Instruction-mode trays filled from the layouts.
 //
 // Run: Session Frontend > Automation, filter "Huebox" - or headless:
 //   UnrealEditor-Cmd.exe Huebox.uproject -ExecCmds="Automation RunTests Huebox; Quit" -unattended -nullrhi
@@ -14,9 +16,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Camera/CameraComponent.h"
+#include "Components/LightComponent.h"
+#include "Components/SceneComponent.h"
+#include "Engine/DirectionalLight.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineBaseTypes.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 #include "UObject/GarbageCollection.h"
 #include "UObject/Package.h"
@@ -28,9 +35,15 @@
 #include "Blocks/PulseBlock.h"
 #include "Core/HueTypes.h"
 #include "Game/ExhibitManager.h"
+#include "Game/HueStageCamera.h"
 #include "Game/HueTutorialBuilder.h"
+#include "Game/HueboxGameMode.h"
 #include "Grid/HueBoard.h"
+#include "Player/HueBuildToolComponent.h"
+#include "Player/HueBuilderPawn.h"
+#include "Player/HueInteractable.h"
 #include "Player/HueInventoryComponent.h"
+#include "Player/HueModulePickup.h"
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
@@ -739,6 +752,126 @@ namespace HueboxTests
 		Sample.SpeedFraction = SpeedFraction;
 		Sample.ReceiverColor = Color;
 		return Sample;
+	}
+
+	// ---- Views / build tool helpers -----------------------------------------------------------------------------
+
+	/** Always-spawn helper for actors without deferred setup (the world has begun play: BeginPlay runs in SpawnActor). */
+	template <typename TActor>
+	TActor* SpawnTestActor(const FHueTestWorld& TestWorld, const FVector& Location = FVector::ZeroVector)
+	{
+		UWorld* World = TestWorld.Get();
+		if (!World)
+		{
+			return nullptr;
+		}
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		return World->SpawnActor<TActor>(TActor::StaticClass(), FTransform(Location), Params);
+	}
+
+	/**
+	 * A bare actor standing in for a player pawn: a scene root (the tool attaches its placement ghost to the owner's
+	 * root) and a UHueBuildToolComponent paying from Inventory. Both components are created at runtime:
+	 * AddInstanceComponent lists them in the actor's InstanceComponents UPROPERTY (the GC reference), and
+	 * RegisterComponent routes their BeginPlay because the owner has already begun play. They end play with the actor
+	 * when the test world tears down (the tool's EndPlay destroys its preview components).
+	 */
+	UHueBuildToolComponent* SpawnBuildTool(const FHueTestWorld& TestWorld, UHueInventoryComponent* Inventory)
+	{
+		// Identity transform: an actor without a root component cannot take a spawn location anyway.
+		AActor* Owner = SpawnTestActor<AActor>(TestWorld);
+		if (!Owner)
+		{
+			return nullptr;
+		}
+
+		USceneComponent* Root = NewObject<USceneComponent>(Owner, TEXT("ToolOwnerRoot"));
+		Owner->SetRootComponent(Root);
+		Owner->AddInstanceComponent(Root);
+		Root->RegisterComponent();
+
+		UHueBuildToolComponent* Tool = NewObject<UHueBuildToolComponent>(Owner, TEXT("BuildTool"));
+		Owner->AddInstanceComponent(Tool);
+		Tool->RegisterComponent();
+		Tool->SetInventory(Inventory);
+		return Tool;
+	}
+
+	const TCHAR* TargetKindName(EHueTargetKind Kind)
+	{
+		switch (Kind)
+		{
+		case EHueTargetKind::Block:  return TEXT("Block");
+		case EHueTargetKind::Pickup: return TEXT("Pickup");
+		case EHueTargetKind::Cell:   return TEXT("Cell");
+		default:                     return TEXT("None");
+		}
+	}
+
+	/** The tool's current target is of kind Expected (a failure names the actual kind and its reason text). */
+	bool ExpectTargetKind(FAutomationTestBase& Test, const FString& What, const UHueBuildToolComponent* Tool, EHueTargetKind Expected)
+	{
+		const FHueInteractionTarget& Target = Tool->GetTarget();
+		if (Target.Kind != Expected)
+		{
+			Test.AddError(FString::Printf(TEXT("%s: target is %s, expected %s (reason \"%s\")"),
+				*What, TargetKindName(Target.Kind), TargetKindName(Expected), *Target.Reason));
+			return false;
+		}
+		return true;
+	}
+
+	/** Empty-cell target that accepts (or refuses) the selected module. A refusal must explain itself to the player. */
+	bool ExpectCellTarget(FAutomationTestBase& Test, const FString& What, const UHueBuildToolComponent* Tool, bool bCanPlace)
+	{
+		if (!ExpectTargetKind(Test, What, Tool, EHueTargetKind::Cell))
+		{
+			return false;
+		}
+		const FHueInteractionTarget& Target = Tool->GetTarget();
+		if (Target.bCanPlace != bCanPlace)
+		{
+			Test.AddError(FString::Printf(TEXT("%s: bCanPlace is %s, expected %s (reason \"%s\")"), *What,
+				Target.bCanPlace ? TEXT("true") : TEXT("false"), bCanPlace ? TEXT("true") : TEXT("false"), *Target.Reason));
+			return false;
+		}
+		if (!bCanPlace && Target.Reason.IsEmpty())
+		{
+			Test.AddError(FString::Printf(TEXT("%s: placement refused without a reason"), *What));
+			return false;
+		}
+		return true;
+	}
+
+	TArray<FHuePulseSnapshot> GetSnapshots(const UPulseSubsystem* Sim)
+	{
+		TArray<FHuePulseSnapshot> Snapshots;
+		if (Sim)
+		{
+			Sim->GetPulseSnapshots(Snapshots);
+		}
+		return Snapshots;
+	}
+
+	/** Exactly one travelling pulse, at fractional cell coordinates Expected, with Color. */
+	bool ExpectSingleSnapshot(FAutomationTestBase& Test, const FString& What, const UPulseSubsystem* Sim, const FVector2D& Expected, EHueColor Color)
+	{
+		const TArray<FHuePulseSnapshot> Snapshots = GetSnapshots(Sim);
+		if (Snapshots.Num() != 1)
+		{
+			Test.AddError(FString::Printf(TEXT("%s: %d pulse snapshots, expected 1"), *What, Snapshots.Num()));
+			return false;
+		}
+		const FHuePulseSnapshot& Snapshot = Snapshots[0];
+		bool bMatch = TestColor(Test, What, Snapshot.Color, Color);
+		if (!Snapshot.CellPosition.Equals(Expected, 1e-4))
+		{
+			Test.AddError(FString::Printf(TEXT("%s: pulse at (%.4f, %.4f), expected (%.4f, %.4f)"), *What,
+				Snapshot.CellPosition.X, Snapshot.CellPosition.Y, Expected.X, Expected.Y));
+			bMatch = false;
+		}
+		return bMatch;
 	}
 }
 
@@ -2082,6 +2215,507 @@ bool FHueboxManagerRerunActiveBoardTest::RunTest(const FString& Parameters)
 	Manager->ToggleRun(AtSecond);
 	TestTrue(TEXT("Build: Space starts the board near the player"), Manager->GetActiveBoard() == Second.Board);
 	Manager->ResetAttempt();
+	return true;
+}
+
+// =============================================================================================================
+// Views: build-camera height, grid cursor, stage camera (pure math, plus one live stage camera)
+// =============================================================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxViewTopDownHeightTest, "Huebox.View.TopDownHeight", HUEBOX_TEST_FLAGS)
+bool FHueboxViewTopDownHeightTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	// Looking straight down from height H, the view spans 2 H tan(hfov / 2) along X and 1 / aspect of that along Y, so
+	// H = max(AreaX / (2 tan(hfov / 2)), AreaY / (2 tan(vfov / 2))) with tan(vfov / 2) = tan(hfov / 2) / aspect.
+	// At 60 degrees tan(30) = 1 / sqrt(3), hence the sqrt(3) factors.
+	const float Sqrt3 = FMath::Sqrt(3.f);
+	const float Wide = 16.f / 9.f;
+	struct FFitCase
+	{
+		const TCHAR* Name;
+		FVector2D Area;
+		float FovDegrees;
+		float Aspect;
+		float Expected;
+		/** Which sides touch the view edge at the computed height (both for an exact fit). */
+		bool bTightX;
+		bool bTightY;
+	};
+	const FFitCase Cases[] =
+	{
+		// 10:3 is wider than the 16:9 view: the width decides.
+		{ TEXT("2000 x 600, 60 deg, 16:9 (width-limited)"), FVector2D(2000.0, 600.0), 60.f, Wide, 1000.f * Sqrt3, true, false },
+		// 5:3 is narrower than 16:9: the height decides although X is the longer side (the X fit alone is 866 cm).
+		{ TEXT("1000 x 600, 60 deg, 16:9 (height-limited)"), FVector2D(1000.0, 600.0), 60.f, Wide, 600.f * Wide * Sqrt3 * 0.5f, false, true },
+		{ TEXT("600 x 1000, 60 deg, 16:9 (height-limited)"), FVector2D(600.0, 1000.0), 60.f, Wide, 1000.f * Wide * Sqrt3 * 0.5f, false, true },
+		// tan(45) = 1: a square area in a square view fits at half its side, touching all four edges.
+		{ TEXT("800 x 800, 90 deg, 1:1 (exact fit)"), FVector2D(800.0, 800.0), 90.f, 1.f, 400.f, true, true },
+	};
+
+	for (const FFitCase& Case : Cases)
+	{
+		const float Height = AHueBuilderPawn::ComputeTopDownHeight(Case.Area, Case.FovDegrees, Case.Aspect);
+		TestEqual(FString::Printf(TEXT("%s: camera height"), Case.Name), Height, Case.Expected, 0.05f);
+
+		// Independent of the formula: from that height the whole area is visible and the limiting side just fits.
+		const float Tolerance = 1e-3f * Case.Expected;
+		const float AreaX = static_cast<float>(Case.Area.X);
+		const float AreaY = static_cast<float>(Case.Area.Y);
+		const float VisibleX = 2.f * Height * FMath::Tan(FMath::DegreesToRadians(Case.FovDegrees * 0.5f));
+		const float VisibleY = VisibleX / Case.Aspect;
+		TestTrue(FString::Printf(TEXT("%s: whole area visible (view %.1f x %.1f cm)"), Case.Name, VisibleX, VisibleY),
+			VisibleX >= AreaX - Tolerance && VisibleY >= AreaY - Tolerance);
+		TestTrue(FString::Printf(TEXT("%s: X edge %s"), Case.Name, Case.bTightX ? TEXT("touches") : TEXT("has room")),
+			FMath::IsNearlyEqual(VisibleX, AreaX, Tolerance) == Case.bTightX);
+		TestTrue(FString::Printf(TEXT("%s: Y edge %s"), Case.Name, Case.bTightY ? TEXT("touches") : TEXT("has room")),
+			FMath::IsNearlyEqual(VisibleY, AreaY, Tolerance) == Case.bTightY);
+	}
+
+	const FVector2D Area(1000.0, 600.0);
+	TestTrue(TEXT("A wider lens brings the camera closer"),
+		AHueBuilderPawn::ComputeTopDownHeight(Area, 90.f, Wide) < AHueBuilderPawn::ComputeTopDownHeight(Area, 55.f, Wide));
+
+	// The pawn's own defaults on a 6 x 6 tutorial grid (1 m cells) give a usable height.
+	const AHueBuilderPawn* Defaults = GetDefault<AHueBuilderPawn>();
+	const float Side = 6.f * 100.f + 2.f * Defaults->CameraMargin;
+	const float TutorialHeight = AHueBuilderPawn::ComputeTopDownHeight(FVector2D(Side, Side), Defaults->CameraFov, Wide);
+	TestTrue(FString::Printf(TEXT("Default build view over a 6 x 6 board is finite and positive (%.1f cm)"), TutorialHeight),
+		FMath::IsFinite(TutorialHeight) && TutorialHeight > 0.f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxViewClampCursorTest, "Huebox.View.ClampCursor", HUEBOX_TEST_FLAGS)
+bool FHueboxViewClampCursorTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	// Non-square grid so swapped axes would show: x in [0, 8], y in [0, 5].
+	const FIntPoint Grid(9, 6);
+	auto ClampAt = [&Grid](int32 X, int32 Y) { return AHueBuilderPawn::ClampCursor(FIntPoint(X, Y), Grid); };
+
+	TestEqual(TEXT("Inside stays"), ClampAt(4, 2), FIntPoint(4, 2));
+	TestEqual(TEXT("Origin corner stays"), ClampAt(0, 0), FIntPoint(0, 0));
+	TestEqual(TEXT("Far corner stays"), ClampAt(8, 5), FIntPoint(8, 5));
+
+	TestEqual(TEXT("Negative x clamps to 0"), ClampAt(-1, 3), FIntPoint(0, 3));
+	TestEqual(TEXT("Negative y clamps to 0"), ClampAt(4, -7), FIntPoint(4, 0));
+	TestEqual(TEXT("Both negative"), ClampAt(-3, -3), FIntPoint(0, 0));
+
+	TestEqual(TEXT("x = width clamps to width - 1"), ClampAt(9, 2), FIntPoint(8, 2));
+	TestEqual(TEXT("y = height clamps to height - 1"), ClampAt(3, 6), FIntPoint(3, 5));
+	TestEqual(TEXT("Far outside clamps to the far corner"), ClampAt(100, 100), FIntPoint(8, 5));
+	TestEqual(TEXT("x too small, y too large"), ClampAt(-2, 9), FIntPoint(0, 5));
+	TestEqual(TEXT("x too large, y too small"), ClampAt(12, -1), FIntPoint(8, 0));
+
+	// WASD / arrows at the border: a one-cell step from any cell moves exactly one cell, or stays put at the edge.
+	int32 Escapes = 0;
+	int32 WrongSteps = 0;
+	for (int32 Y = 0; Y < Grid.Y; ++Y)
+	{
+		for (int32 X = 0; X < Grid.X; ++X)
+		{
+			for (const EHueDir Dir : AllDirs)
+			{
+				const FIntPoint From(X, Y);
+				const FIntPoint Wanted = From + HueDir::ToOffset(Dir);
+				const FIntPoint Got = AHueBuilderPawn::ClampCursor(Wanted, Grid);
+				const bool bWantedInside = Wanted.X >= 0 && Wanted.Y >= 0 && Wanted.X < Grid.X && Wanted.Y < Grid.Y;
+				Escapes += (Got.X >= 0 && Got.Y >= 0 && Got.X < Grid.X && Got.Y < Grid.Y) ? 0 : 1;
+				WrongSteps += (Got == (bWantedInside ? Wanted : From)) ? 0 : 1;
+			}
+		}
+	}
+	TestEqual(TEXT("The cursor never leaves the grid"), Escapes, 0);
+	TestEqual(TEXT("Steps move one cell, or stay at the border"), WrongSteps, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxViewStageCameraMathTest, "Huebox.View.StageCameraMath", HUEBOX_TEST_FLAGS)
+bool FHueboxViewStageCameraMathTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	// Track of 1000 cm starting at rig X = 200 with a 150 cm margin: the camera follows inside [50, 1350].
+	TestEqual(TEXT("Performer on the track is followed exactly"), AHueStageCamera::ClampFollowX(640.f, 200.f, 1000.f, 150.f), 640.f);
+	TestEqual(TEXT("Inside the margin before the anchor end"), AHueStageCamera::ClampFollowX(120.f, 200.f, 1000.f, 150.f), 120.f);
+	TestEqual(TEXT("Before the anchor end clamps to RigX - Margin"), AHueStageCamera::ClampFollowX(-400.f, 200.f, 1000.f, 150.f), 50.f);
+	TestEqual(TEXT("Past the far end clamps to RigX + TrackLength + Margin"), AHueStageCamera::ClampFollowX(5000.f, 200.f, 1000.f, 150.f), 1350.f);
+	TestEqual(TEXT("Lower bound is inclusive"), AHueStageCamera::ClampFollowX(50.f, 200.f, 1000.f, 150.f), 50.f);
+	TestEqual(TEXT("Upper bound is inclusive"), AHueStageCamera::ClampFollowX(1350.f, 200.f, 1000.f, 150.f), 1350.f);
+	TestEqual(TEXT("No margin: clamps to the anchor end"), AHueStageCamera::ClampFollowX(100.f, 200.f, 1000.f, 0.f), 200.f);
+	TestEqual(TEXT("No margin: clamps to the far end"), AHueStageCamera::ClampFollowX(1300.f, 200.f, 1000.f, 0.f), 1200.f);
+	TestEqual(TEXT("Rig at negative X"), AHueStageCamera::ClampFollowX(-1000.f, -200.f, 1000.f, 150.f), -350.f);
+
+	// Viewer side: SideDistance towards +Y of the rig, Height above it; X is the followed X, not the rig's.
+	const FVector RigOrigin(-200.0, -170.0, 30.0);
+	TestEqual(TEXT("Camera location"), AHueStageCamera::ComputeCameraLocation(RigOrigin, 400.f, 650.f, 170.f), FVector(400.0, 480.0, 200.0), 1e-3f);
+	TestEqual(TEXT("Only X follows the performer"), AHueStageCamera::ComputeCameraLocation(RigOrigin, 900.f, 650.f, 170.f), FVector(900.0, 480.0, 200.0), 1e-3f);
+
+	// Live camera: SetRig(snap) jumps straight to the (clamped) performer and looks across the track at the stage.
+	FHueTestWorld TestWorld;
+	AReactiveRig* Rig = TestWorld.SpawnRig(FVector(-200.0, -170.0, 0.0), 1000.f);
+	UTEST_NOT_NULL(TEXT("Rig"), Rig);
+	AHueStageCamera* StageCamera = SpawnTestActor<AHueStageCamera>(TestWorld);
+	UTEST_NOT_NULL(TEXT("Stage camera"), StageCamera);
+	UTEST_NOT_NULL(TEXT("Stage camera component"), StageCamera->GetCamera());
+	TestEqual(TEXT("Camera component uses the stage FOV"), StageCamera->GetCamera()->FieldOfView, StageCamera->FieldOfView);
+
+	StageCamera->SetRig(Rig, /*bSnap*/ true);
+	TestTrue(TEXT("Follows the rig"), StageCamera->GetRig() == Rig);
+
+	const FVector Origin = Rig->GetActorLocation();
+	const float FollowX = AHueStageCamera::ClampFollowX(static_cast<float>(Rig->GetPerformerLocation().X), static_cast<float>(Origin.X),
+		Rig->GetTrackLength(), StageCamera->TrackMargin);
+	const FVector ExpectedLocation = AHueStageCamera::ComputeCameraLocation(Origin, FollowX, StageCamera->SideDistance, StageCamera->Height);
+	TestEqual(TEXT("Snapped onto the performer"), StageCamera->GetActorLocation(), ExpectedLocation, 0.1f);
+	TestTrue(TEXT("Stands on the viewer side (+Y) of the rig"), ExpectedLocation.Y > Origin.Y);
+
+	// Aim: straight across the track (no X component), towards -Y, at the stage's LookHeight (within ~2.5 degrees).
+	const FVector Forward = StageCamera->GetActorForwardVector();
+	const FVector ToStage = (FVector(static_cast<double>(FollowX), Origin.Y, Origin.Z + StageCamera->LookHeight) - ExpectedLocation).GetSafeNormal();
+	TestTrue(FString::Printf(TEXT("Looks across the track at the stage (forward %s)"), *Forward.ToString()),
+		FMath::Abs(Forward.X) < 1e-3 && Forward.Y < 0.0 && FVector::DotProduct(Forward, ToStage) > 0.999);
+
+	StageCamera->SetRig(nullptr, /*bSnap*/ true);
+	TestNull(TEXT("SetRig(null) releases the rig"), StageCamera->GetRig());
+	return true;
+}
+
+// =============================================================================================================
+// Minimap: travelling pulses as fractional cell positions
+// =============================================================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxSimPulseSnapshotsTest, "Huebox.Sim.PulseSnapshots", HUEBOX_TEST_FLAGS)
+bool FHueboxSimPulseSnapshotsTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	FHueTestWorld TestWorld;
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem"), Sim);
+	Sim->SetVisualsEnabled(false);
+
+	// Row: S(0,2) fires B East; (1,2) is empty (reached at 0.25 s, the pulse continues); R(2,2) consumes it at 0.50 s.
+	AHueBoard* Row = TestWorld.SpawnBoard(BoardOrigin(0), FIntPoint(6, 6));
+	UTEST_NOT_NULL(TEXT("Row board"), Row);
+	const bool bRowSource = AddSource(*this, Row, FIntPoint(0, 2), EHueDir::East, EHueColor::B) != nullptr;
+	AHueReceiverBlock* RowReceiver = AddReceiver(*this, Row, FIntPoint(2, 2), { EHueDir::West });
+	UTEST_TRUE(TEXT("Row scenario built"), bRowSource && RowReceiver != nullptr);
+
+	TestEqual(TEXT("No snapshots before a run"), GetSnapshots(Sim).Num(), 0);
+	UTEST_TRUE(TEXT("Row run started"), StartBoardRun(Sim, Row));
+	{
+		FSimClock Clock(Sim);
+		ExpectSingleSnapshot(*this, TEXT("t = 0: on the source cell"), Sim, FVector2D(0.0, 2.0), EHueColor::B);
+		Clock.AdvanceTo(0.125);
+		ExpectSingleSnapshot(*this, TEXT("0.125 s: halfway between the source and its neighbour"), Sim, FVector2D(0.5, 2.0), EHueColor::B);
+		Clock.AdvanceTo(0.25);
+		ExpectSingleSnapshot(*this, TEXT("0.25 s: on the empty neighbour cell"), Sim, FVector2D(1.0, 2.0), EHueColor::B);
+		Clock.AdvanceTo(0.375);
+		ExpectSingleSnapshot(*this, TEXT("0.375 s: halfway to the receiver"), Sim, FVector2D(1.5, 2.0), EHueColor::B);
+		Clock.AdvanceTo(0.5);
+		TestEqual(TEXT("0.50 s: the receiver consumed the pulse - no snapshots"), GetSnapshots(Sim).Num(), 0);
+		TestColor(*this, TEXT("Row receiver"), RowReceiver->GetCurrentColor(), EHueColor::B);
+	}
+
+	// Column: S(2,0) fires A North into D(2,2) 1.0 s -> R(2,4) (South face). Y interpolates too, and a pulse held
+	// in the delay is not travelling, so it has no snapshot (stored 0.50 s, released 1.50 s, consumed 2.00 s).
+	AHueBoard* Column = TestWorld.SpawnBoard(BoardOrigin(1), FIntPoint(6, 6));
+	UTEST_NOT_NULL(TEXT("Column board"), Column);
+	const bool bColumnSource = AddSource(*this, Column, FIntPoint(2, 0), EHueDir::North, EHueColor::A) != nullptr;
+	AHueDelayBlock* Delay = AddDelay(*this, Column, FIntPoint(2, 2), EHueDir::North, 1.0f);
+	AHueReceiverBlock* ColumnReceiver = AddReceiver(*this, Column, FIntPoint(2, 4), { EHueDir::South });
+	UTEST_TRUE(TEXT("Column scenario built"), bColumnSource && Delay != nullptr && ColumnReceiver != nullptr);
+
+	UTEST_TRUE(TEXT("Column run started"), StartBoardRun(Sim, Column));
+	{
+		FSimClock Clock(Sim);
+		Clock.AdvanceTo(0.125);
+		ExpectSingleSnapshot(*this, TEXT("0.125 s: halfway up the column"), Sim, FVector2D(2.0, 0.5), EHueColor::A);
+		Clock.AdvanceTo(0.5);
+		TestTrue(TEXT("0.50 s: the delay holds the pulse"), Delay->IsHolding());
+		TestEqual(TEXT("A held pulse has no snapshot"), GetSnapshots(Sim).Num(), 0);
+		TestEqual(TEXT("... although it is still an active signal"), Sim->GetActiveSignalCount(), 1);
+		Clock.AdvanceTo(1.5);
+		ExpectSingleSnapshot(*this, TEXT("1.50 s: released on the delay's cell"), Sim, FVector2D(2.0, 2.0), EHueColor::A);
+		Clock.AdvanceTo(1.625);
+		ExpectSingleSnapshot(*this, TEXT("1.625 s: halfway past the delay"), Sim, FVector2D(2.0, 2.5), EHueColor::A);
+		Clock.AdvanceTo(2.0);
+		TestEqual(TEXT("2.00 s: consumed - no snapshots"), GetSnapshots(Sim).Num(), 0);
+		ExpectHistory(*this, TEXT("Column receiver"), ColumnReceiver->GetAppliedHistory(), { MakeEvent(2.0f, EHueColor::A) });
+	}
+
+	// A reset (StopAndClear) mid-flight drops every snapshot.
+	UTEST_TRUE(TEXT("Row rerun started"), StartBoardRun(Sim, Row));
+	{
+		FSimClock Clock(Sim);
+		Clock.AdvanceTo(0.125);
+		TestEqual(TEXT("Rerun: one pulse in flight"), GetSnapshots(Sim).Num(), 1);
+	}
+	Sim->StopAndClear();
+	TestEqual(TEXT("No snapshots after StopAndClear"), GetSnapshots(Sim).Num(), 0);
+	return true;
+}
+
+// =============================================================================================================
+// Build tool + board trays (Instruction mode)
+// =============================================================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxBuildTrayPlaceAndCollectTest, "Huebox.Build.TrayPlaceAndCollect", HUEBOX_TEST_FLAGS)
+bool FHueboxBuildTrayPlaceAndCollectTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	FHueTestWorld TestWorld;
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem"), Sim);
+	Sim->SetVisualsEnabled(false);
+
+	// No exhibit manager in this world, so editing is always allowed (the Build-state lock is not exercised here).
+	// Fixed source at (0,0); the board's tray holds one Turn, as an Instruction exercise would.
+	AHueBoard* Board = TestWorld.SpawnBoard(FVector::ZeroVector, FIntPoint(6, 6));
+	UTEST_NOT_NULL(TEXT("Board"), Board);
+	UHueInventoryComponent* Tray = Board->GetTray();
+	UTEST_NOT_NULL(TEXT("Every board owns a tray"), Tray);
+	AHueSourceBlock* Source = AddSource(*this, Board, FIntPoint(0, 0), EHueDir::East, EHueColor::B);
+	UTEST_NOT_NULL(TEXT("Fixed source"), Source);
+	const TWeakObjectPtr<AHueSourceBlock> WeakSource(Source);
+	UTEST_TRUE(TEXT("Tray filled with one Turn"), Tray->AddItem(EHueModuleType::Turn, 1) == 1);
+	Tray->SelectSlot(0);
+
+	UHueBuildToolComponent* Tool = SpawnBuildTool(TestWorld, Tray);
+	UTEST_NOT_NULL(TEXT("Build tool on a stand-in pawn"), Tool);
+	AActor* Player = Tool->GetOwner();
+	TestTrue(TEXT("The tool pays from the board's tray"), Tool->GetInventory() == Tray);
+	TestTrue(TEXT("No exhibit manager: editing allowed"), Tool->IsEditingAllowed());
+
+	// ---- Place on an empty cell -------------------------------------------------------------------------------------
+	const FIntPoint Cell(2, 3);
+	Tool->SetTargetCell(Board, Cell);
+	ExpectCellTarget(*this, TEXT("Cursor on an empty cell, Turn selected"), Tool, /*bCanPlace*/ true);
+	TestTrue(TEXT("Cell target names the board"), Tool->GetTarget().Board.Get() == Board);
+	TestEqual(TEXT("Cell target names the cell"), Tool->GetTarget().Cell, Cell);
+
+	// Q / E with nothing rotatable under the cursor turn the placement preview.
+	Tool->SetPreviewFacing(EHueDir::East);
+	Tool->RotateTargetOrPreview(+1);
+	TestDir(*this, TEXT("E on an empty cell rotates the preview"), Tool->GetPreviewFacing(), EHueDir::North);
+
+	TestTrue(TEXT("TryPlaceSelected on the empty cell"), Tool->TryPlaceSelected());
+	AHueTurnBlock* Placed = Cast<AHueTurnBlock>(Board->GetBlockAt(Cell));
+	UTEST_NOT_NULL(TEXT("A Turn stands on the cell"), Placed);
+	TestDir(*this, TEXT("Placed with the preview facing"), Placed->GetFacing(), EHueDir::North);
+	TestTrue(TEXT("Player-placed modules are removable"), Placed->IsRemovable());
+	TestEqual(TEXT("The tray paid for the placement"), Tray->CountOf(EHueModuleType::Turn), 0);
+	TestTrue(TEXT("An empty tray selects nothing"), Tray->GetSelectedType() == EHueModuleType::None);
+
+	// The target is rebuilt from board + cell: the cursor now points at the new block.
+	Tool->RefreshTarget();
+	ExpectTargetKind(*this, TEXT("Refreshed target after placing"), Tool, EHueTargetKind::Block);
+	TestTrue(TEXT("Block target is the placed Turn"), Tool->GetTarget().Block.Get() == Placed);
+	TestFalse(TEXT("A removable block offers a prompt"), IHueInteractable::Execute_GetInteractPrompt(Placed, Player).IsEmpty());
+
+	// Q / E on a removable block turn the block; the preview keeps its facing.
+	Tool->RotateTargetOrPreview(+1);
+	TestDir(*this, TEXT("E on the placed Turn rotates it"), Placed->GetFacing(), EHueDir::West);
+	TestDir(*this, TEXT("Preview untouched while a block is targeted"), Tool->GetPreviewFacing(), EHueDir::North);
+
+	// With the tray empty another free cell is refused (with a reason) and nothing is spawned.
+	const FIntPoint OtherCell(4, 4);
+	Tool->SetTargetCell(Board, OtherCell);
+	ExpectCellTarget(*this, TEXT("Free cell, empty tray"), Tool, /*bCanPlace*/ false);
+	TestFalse(TEXT("TryPlaceSelected with an empty tray"), Tool->TryPlaceSelected());
+	TestNull(TEXT("Nothing placed from an empty tray"), Board->GetBlockAt(OtherCell));
+
+	// ---- RMB collects the block back into the tray ----------------------------------------------------------------
+	const TWeakObjectPtr<AHueTurnBlock> WeakPlaced(Placed);
+	Placed = nullptr; // destroyed by the collection: only the weak pointer may be consulted from here on
+	Tool->SetTargetCell(Board, Cell);
+	ExpectTargetKind(*this, TEXT("Cursor on the placed Turn"), Tool, EHueTargetKind::Block);
+	Tool->SecondaryAction();
+	TestFalse(TEXT("RMB collected (destroyed) the block"), WeakPlaced.IsValid());
+	TestTrue(TEXT("Cell free again"), Board->GetBlockAt(Cell) == nullptr && Board->IsCellFree(Cell));
+	TestEqual(TEXT("The Turn went back into the tray"), Tray->CountOf(EHueModuleType::Turn), 1);
+	TestTrue(TEXT("The collected module is selected again"), Tray->GetSelectedType() == EHueModuleType::Turn);
+	Tool->RefreshTarget();
+	ExpectCellTarget(*this, TEXT("Refreshed target after collecting"), Tool, /*bCanPlace*/ true);
+
+	// ---- LMB round trip: place, then LMB on the block collects it through IHueInteractable (Interactor = owner) ----
+	Tool->PrimaryAction();
+	AHueTurnBlock* Replaced = Cast<AHueTurnBlock>(Board->GetBlockAt(Cell));
+	TestNotNull(TEXT("LMB on an empty cell placed a Turn"), Replaced);
+	TestEqual(TEXT("The LMB placement paid from the tray"), Tray->CountOf(EHueModuleType::Turn), 0);
+	ExpectTargetKind(*this, TEXT("PrimaryAction refreshed the target onto the new block"), Tool, EHueTargetKind::Block);
+	const TWeakObjectPtr<AHueTurnBlock> WeakReplaced(Replaced);
+	Replaced = nullptr;
+	Tool->PrimaryAction();
+	TestFalse(TEXT("LMB on a removable block collected it"), WeakReplaced.IsValid());
+	TestEqual(TEXT("The LMB collection refilled the tray"), Tray->CountOf(EHueModuleType::Turn), 1);
+	ExpectCellTarget(*this, TEXT("Cell target again after the LMB collection"), Tool, /*bCanPlace*/ true);
+
+	// ---- Fixed units are refused by every path ----------------------------------------------------------------------
+	Tool->SetTargetCell(Board, FIntPoint(0, 0));
+	ExpectTargetKind(*this, TEXT("Cursor on the fixed source"), Tool, EHueTargetKind::Block);
+	TestTrue(TEXT("Block target is the source"), Tool->GetTarget().Block.Get() == Source);
+	Tool->SecondaryAction();
+	Tool->PrimaryAction();
+	TestFalse(TEXT("TryCollectBlock refuses a fixed unit"), WeakSource.IsValid() && Tool->TryCollectBlock(WeakSource.Get()));
+	UTEST_TRUE(TEXT("The source is still on its cell"), WeakSource.IsValid() && Board->GetBlockAt(FIntPoint(0, 0)) == WeakSource.Get());
+	TestEqual(TEXT("Refused collections add nothing"), Tray->CountOf(EHueModuleType::Turn), 1);
+	Tool->RotateTargetOrPreview(+1);
+	TestDir(*this, TEXT("Fixed units do not rotate"), WeakSource->GetFacing(), EHueDir::East);
+	TestDir(*this, TEXT("Q / E on a fixed unit leave the preview alone"), Tool->GetPreviewFacing(), EHueDir::North);
+
+	// ---- Owner veto (the sandbox pawn binds its IsStandingOnCell) ---------------------------------------------------
+	const FIntPoint VetoCell(3, 3);
+	// Captures a value only (no UObject); unbound again below.
+	Tool->CellBlockedQuery.BindLambda([VetoCell](const AHueBoard* /*QueryBoard*/, FIntPoint QueryCell) { return QueryCell == VetoCell; });
+	Tool->SetTargetCell(Board, VetoCell);
+	ExpectCellTarget(*this, TEXT("Vetoed cell"), Tool, /*bCanPlace*/ false);
+	TestEqual(TEXT("The veto shows the owner's reason"), Tool->GetTarget().Reason, Tool->CellBlockedReason);
+	TestFalse(TEXT("TryPlaceSelected re-checks the veto"), Tool->TryPlaceSelected());
+	TestNull(TEXT("Nothing placed on the vetoed cell"), Board->GetBlockAt(VetoCell));
+	TestEqual(TEXT("A vetoed placement costs nothing"), Tray->CountOf(EHueModuleType::Turn), 1);
+	Tool->SetTargetCell(Board, FIntPoint(4, 3));
+	ExpectCellTarget(*this, TEXT("The veto names a single cell"), Tool, /*bCanPlace*/ true);
+	Tool->CellBlockedQuery.Unbind();
+	Tool->SetTargetCell(Board, VetoCell);
+	ExpectCellTarget(*this, TEXT("Veto lifted"), Tool, /*bCanPlace*/ true);
+
+	// ---- Pickups (the sandbox supply) through IHueInteractable ------------------------------------------------------
+	AHueModulePickup* Pickup = SpawnTestActor<AHueModulePickup>(TestWorld, FVector(300.0, 900.0, 30.0));
+	UTEST_NOT_NULL(TEXT("Pickup"), Pickup);
+	Pickup->SetContents(EHueModuleType::Delay, 2);
+	const TWeakObjectPtr<AHueModulePickup> WeakPickup(Pickup);
+	TestFalse(TEXT("No interactor: the pickup stays"), IHueInteractable::Execute_Interact(Pickup, nullptr));
+	TestFalse(TEXT("An interactor without a build tool takes nothing"), IHueInteractable::Execute_Interact(Pickup, Board));
+	TestEqual(TEXT("Pickup untouched"), Pickup->GetCount(), 2);
+	TestTrue(TEXT("The tool's owner collects the pickup"), IHueInteractable::Execute_Interact(Pickup, Player));
+	Pickup = nullptr; // emptied pickups destroy themselves
+	TestFalse(TEXT("Emptied pickup destroyed"), WeakPickup.IsValid());
+	TestEqual(TEXT("Both delays went into the tray"), Tray->CountOf(EHueModuleType::Delay), 2);
+	TestTrue(TEXT("Collecting a pickup keeps the current selection"), Tray->GetSelectedType() == EHueModuleType::Turn);
+
+	// ---- No target: the actions do nothing -------------------------------------------------------------------------
+	Tool->ClearTarget();
+	ExpectTargetKind(*this, TEXT("ClearTarget"), Tool, EHueTargetKind::None);
+	Tool->PrimaryAction();
+	Tool->SecondaryAction();
+	TestEqual(TEXT("No target: tray unchanged"), Tray->CountOf(EHueModuleType::Turn), 1);
+	TestTrue(TEXT("No target: board unchanged"), Board->IsCellFree(Cell) && Board->IsCellFree(VetoCell));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxBuildInstructionTrayTest, "Huebox.Build.InstructionTrayFromLayout", HUEBOX_TEST_FLAGS)
+bool FHueboxBuildInstructionTrayTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	FHueTestWorld TestWorld;
+	UWorld* World = TestWorld.Get();
+	UTEST_NOT_NULL(TEXT("Test world"), World);
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem"), Sim);
+	Sim->SetVisualsEnabled(false);
+
+	// The test world has no game mode, so the play mode is the default: Instruction.
+	UTEST_TRUE(TEXT("No Huebox game mode => Instruction mode"), AHueboxGameMode::GetPlayMode(World) == EHuePlayMode::Instruction);
+
+	// The "level" already has a sun, so the builder adds no placeholder sky / lights (irrelevant here); it still lays
+	// its ground slab as on an empty map. Movable before FinishSpawning, as for any light spawned at runtime.
+	{
+		const FTransform SunTransform(FRotator(-50.f, 40.f, 0.f), FVector(0.0, 0.0, 800.0));
+		ADirectionalLight* Sun = World->SpawnActorDeferred<ADirectionalLight>(ADirectionalLight::StaticClass(), SunTransform,
+			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		UTEST_NOT_NULL(TEXT("Sun"), Sun);
+		if (ULightComponent* SunLight = Sun->GetLightComponent())
+		{
+			SunLight->SetMobility(EComponentMobility::Movable);
+		}
+		Sun->FinishSpawning(SunTransform);
+	}
+
+	// The real path: a spawned builder's BeginPlay runs BuildAll -> BuildBoard (protected) for every exercise.
+	AHueTutorialBuilder* Builder = SpawnTestActor<AHueTutorialBuilder>(TestWorld);
+	UTEST_NOT_NULL(TEXT("Tutorial builder"), Builder);
+	const TArray<FHueBoardLayout>& Layouts = Builder->GetLayouts();
+	UTEST_TRUE(TEXT("Three tutorial layouts"), Layouts.Num() >= 3);
+
+	// Boards by layout index (FindLayoutForBoard returns an element of GetLayouts()).
+	TArray<AHueBoard*> BoardOfLayout;
+	BoardOfLayout.Init(nullptr, Layouts.Num());
+	int32 BoardCount = 0;
+	for (TActorIterator<AHueBoard> It(World); It; ++It)
+	{
+		AHueBoard* Board = *It;
+		if (!IsValid(Board))
+		{
+			continue;
+		}
+		++BoardCount;
+		const FHueBoardLayout* Layout = Builder->FindLayoutForBoard(Board);
+		for (int32 Index = 0; Index < Layouts.Num(); ++Index)
+		{
+			if (Layout == &Layouts[Index])
+			{
+				BoardOfLayout[Index] = Board;
+			}
+		}
+	}
+	TestEqual(TEXT("One board per layout"), BoardCount, Layouts.Num());
+
+	// Exercise 1 (GDD 4): Turn x2 + Colour shift x1, first slot selected so LMB places a Turn right away.
+	AHueBoard* First = BoardOfLayout[0];
+	UTEST_NOT_NULL(TEXT("Exercise 1 board"), First);
+	UHueInventoryComponent* FirstTray = First->GetTray();
+	UTEST_NOT_NULL(TEXT("Exercise 1 tray"), FirstTray);
+	TestEqual(TEXT("Exercise 1 tray: Turn x2"), FirstTray->CountOf(EHueModuleType::Turn), 2);
+	TestEqual(TEXT("Exercise 1 tray: Colour shift x1"), FirstTray->CountOf(EHueModuleType::ColorShift), 1);
+	TestEqual(TEXT("Exercise 1 tray: first slot selected"), FirstTray->GetSelectedIndex(), 0);
+	TestTrue(TEXT("Exercise 1 tray: Turn selected"), FirstTray->GetSelectedType() == EHueModuleType::Turn);
+
+	// Every exercise: the tray holds exactly the layout's supply, nothing more (exercise 2 has none).
+	const EHueModuleType ModuleTypes[] = { EHueModuleType::Turn, EHueModuleType::ColorShift, EHueModuleType::Delay, EHueModuleType::Mixer };
+	for (int32 Index = 0; Index < Layouts.Num(); ++Index)
+	{
+		const FHueBoardLayout& Layout = Layouts[Index];
+		const AHueBoard* Board = BoardOfLayout[Index];
+		const UHueInventoryComponent* Tray = Board ? Board->GetTray() : nullptr;
+		if (!TestNotNull(FString::Printf(TEXT("%s: board with a tray"), *Layout.Name), Tray))
+		{
+			continue;
+		}
+		TMap<EHueModuleType, int32> Supply;
+		for (const FHuePickupSpec& Spec : Layout.Pickups)
+		{
+			Supply.FindOrAdd(Spec.Type) += Spec.Count;
+		}
+		for (const EHueModuleType Type : ModuleTypes)
+		{
+			TestEqual(FString::Printf(TEXT("%s: tray holds the layout's %s supply"), *Layout.Name, *ModuleName(Type)),
+				Tray->CountOf(Type), Supply.FindRef(Type));
+		}
+		if (Supply.Num() == 0)
+		{
+			TestTrue(FString::Printf(TEXT("%s: an empty tray selects nothing"), *Layout.Name), Tray->GetSelectedType() == EHueModuleType::None);
+		}
+	}
+
+	// Instruction mode: modules come from the trays only, never from the floor.
+	int32 FloorPickups = 0;
+	for (TActorIterator<AHueModulePickup> It(World); It; ++It)
+	{
+		FloorPickups += IsValid(*It) ? 1 : 0;
+	}
+	TestEqual(TEXT("No floor pickups in Instruction mode"), FloorPickups, 0);
+
+	// Trays are layout data, not run state: resetting the exercise keeps them.
+	First->ResetAllBlocks();
+	First->ResetObjectives();
+	TestEqual(TEXT("Tray survives a reset: Turn"), FirstTray->CountOf(EHueModuleType::Turn), 2);
+	TestEqual(TEXT("Tray survives a reset: Colour shift"), FirstTray->CountOf(EHueModuleType::ColorShift), 1);
 	return true;
 }
 

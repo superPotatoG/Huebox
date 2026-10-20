@@ -64,6 +64,10 @@ public:
 	/** Advances logical time by Seconds and processes due events. Used by Tick and by automation tests. */
 	void StepSimulation(double Seconds);
 
+	/** Positions of all travelling pulses at the current (exact) simulation time, in fractional cell coordinates of
+	 *  the active board (minimap). Held signals (delay buffer, mixer wait) are not travelling and not included. */
+	void GetPulseSnapshots(TArray<FHuePulseSnapshot>& OutSnapshots) const;
+
 	/** When false (tests), no pulse visual actors are spawned. */
 	void SetVisualsEnabled(bool bEnabled) { bVisualsEnabled = bEnabled; }
 

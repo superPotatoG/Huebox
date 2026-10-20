@@ -61,6 +61,30 @@ namespace HueInputPrivate
 			}
 		}
 	}
+
+	/** Number keys share one Axis1D action; the scalar turns the key's 1.0 into the slot number 1..6. */
+	static void MapHotbarSlots(UInputMappingContext* Context, const UInputAction* HotbarSlot)
+	{
+		const FKey SlotKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six };
+		double SlotNumber = 1.0;
+		for (const FKey& SlotKey : SlotKeys)
+		{
+			Map(Context, HotbarSlot, SlotKey, { MakeScalar(Context, FVector(SlotNumber, 1.0, 1.0)) });
+			SlotNumber += 1.0;
+		}
+	}
+
+	/** Keys shared by both Instruction-mode contexts: run control, next exercise, help and the pause menu. */
+	static void MapRunAndMenuKeys(UInputMappingContext* Context, const UHueInputConfig& Config)
+	{
+		Map(Context, Config.RunToggle, EKeys::SpaceBar);
+		Map(Context, Config.ResetRun, EKeys::R);
+		Map(Context, Config.NextBoard, EKeys::Tab);
+		Map(Context, Config.NextBoard, EKeys::RightBracket);
+		Map(Context, Config.ToggleHelp, EKeys::H);
+		Map(Context, Config.PauseMenu, EKeys::Escape);
+		Map(Context, Config.PauseMenu, EKeys::P);
+	}
 }
 
 void UHueInputConfig::BuildDefaults()
@@ -70,7 +94,7 @@ void UHueInputConfig::BuildDefaults()
 		return;
 	}
 
-	// Actions first: IsBuilt() keys off MappingContext, so the context is created last.
+	// Actions first: IsBuilt() keys off MappingContext, so the sandbox context is created last.
 	Move         = HueInputPrivate::MakeAction(this, TEXT("IA_Move"),         EInputActionValueType::Axis2D);
 	Look         = HueInputPrivate::MakeAction(this, TEXT("IA_Look"),         EInputActionValueType::Axis2D);
 	Interact     = HueInputPrivate::MakeAction(this, TEXT("IA_Interact"),     EInputActionValueType::Boolean);
@@ -86,9 +110,54 @@ void UHueInputConfig::BuildDefaults()
 	ToggleHelp   = HueInputPrivate::MakeAction(this, TEXT("IA_ToggleHelp"),   EInputActionValueType::Boolean);
 	PauseMenu    = HueInputPrivate::MakeAction(this, TEXT("IA_PauseMenu"),    EInputActionValueType::Boolean);
 
+	// Instruction mode (builder pawn).
+	CursorMove   = HueInputPrivate::MakeAction(this, TEXT("IA_CursorMove"),   EInputActionValueType::Axis2D);
+	Secondary    = HueInputPrivate::MakeAction(this, TEXT("IA_Secondary"),    EInputActionValueType::Boolean);
+	NextBoard    = HueInputPrivate::MakeAction(this, TEXT("IA_NextBoard"),    EInputActionValueType::Boolean);
+	PrevBoard    = HueInputPrivate::MakeAction(this, TEXT("IA_PrevBoard"),    EInputActionValueType::Boolean);
+
 	// The pause key must still fire while the game is paused, otherwise the menu could never be closed.
 	PauseMenu->bTriggerWhenPaused = true;
 
+	// ---- Build view (top-down cursor) -------------------------------------------------------------------------
+	UInputMappingContext* Build = NewObject<UInputMappingContext>(this, TEXT("IMC_HueBuild"));
+
+	// CursorMove (Axis2D: X = screen right, Y = screen up). Same swizzle / negate scheme as Move, keys + arrows.
+	for (const FKey& Key : { EKeys::D, EKeys::Right })
+	{
+		HueInputPrivate::Map(Build, CursorMove, Key);
+	}
+	for (const FKey& Key : { EKeys::A, EKeys::Left })
+	{
+		HueInputPrivate::Map(Build, CursorMove, Key, { HueInputPrivate::MakeNegate(Build) });
+	}
+	for (const FKey& Key : { EKeys::W, EKeys::Up })
+	{
+		HueInputPrivate::Map(Build, CursorMove, Key, { HueInputPrivate::MakeSwizzleYXZ(Build) });
+	}
+	for (const FKey& Key : { EKeys::S, EKeys::Down })
+	{
+		HueInputPrivate::Map(Build, CursorMove, Key, { HueInputPrivate::MakeSwizzleYXZ(Build), HueInputPrivate::MakeNegate(Build) });
+	}
+
+	HueInputPrivate::Map(Build, Interact, EKeys::LeftMouseButton);
+	HueInputPrivate::Map(Build, Secondary, EKeys::RightMouseButton);
+	HueInputPrivate::Map(Build, RotateLeft, EKeys::Q);
+	HueInputPrivate::Map(Build, RotateRight, EKeys::E);
+	HueInputPrivate::Map(Build, DelayDown, EKeys::Z);
+	HueInputPrivate::Map(Build, DelayUp, EKeys::X);
+	HueInputPrivate::Map(Build, HotbarScroll, EKeys::MouseWheelAxis);
+	HueInputPrivate::MapHotbarSlots(Build, HotbarSlot);
+	HueInputPrivate::Map(Build, PrevBoard, EKeys::LeftBracket);
+	HueInputPrivate::MapRunAndMenuKeys(Build, *this);
+	BuildContext = Build;
+
+	// ---- Watch view (side camera): only run control, next exercise, help and pause -----------------------------
+	UInputMappingContext* Watch = NewObject<UInputMappingContext>(this, TEXT("IMC_HueWatch"));
+	HueInputPrivate::MapRunAndMenuKeys(Watch, *this);
+	WatchContext = Watch;
+
+	// ---- Sandbox / first person (unchanged) ----------------------------------------------------------------------
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(this, TEXT("IMC_Huebox"));
 
 	// Move (Axis2D: X = right, Y = forward). A boolean key yields (1,0,0); swizzle moves it onto Y.
@@ -106,15 +175,7 @@ void UHueInputConfig::BuildDefaults()
 	HueInputPrivate::Map(Context, DelayDown, EKeys::Z);
 	HueInputPrivate::Map(Context, DelayUp, EKeys::X);
 	HueInputPrivate::Map(Context, HotbarScroll, EKeys::MouseWheelAxis);
-
-	// Number keys share one Axis1D action; the scalar turns the key's 1.0 into the slot number 1..6.
-	const FKey SlotKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six };
-	double SlotNumber = 1.0;
-	for (const FKey& SlotKey : SlotKeys)
-	{
-		HueInputPrivate::Map(Context, HotbarSlot, SlotKey, { HueInputPrivate::MakeScalar(Context, FVector(SlotNumber, 1.0, 1.0)) });
-		SlotNumber += 1.0;
-	}
+	HueInputPrivate::MapHotbarSlots(Context, HotbarSlot);
 
 	HueInputPrivate::Map(Context, Drop, EKeys::G);
 	HueInputPrivate::Map(Context, RunToggle, EKeys::SpaceBar);
@@ -125,5 +186,6 @@ void UHueInputConfig::BuildDefaults()
 
 	MappingContext = Context;
 
-	UE_LOG(LogHuebox, Verbose, TEXT("HueInputConfig: built %d key mappings"), Context->GetMappings().Num());
+	UE_LOG(LogHuebox, Verbose, TEXT("HueInputConfig: built %d / %d / %d key mappings (sandbox / build / watch)"),
+		Context->GetMappings().Num(), Build->GetMappings().Num(), Watch->GetMappings().Num());
 }

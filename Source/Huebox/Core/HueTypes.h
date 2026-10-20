@@ -51,6 +51,27 @@ enum class EHueRunState : uint8
 	Complete
 };
 
+/**
+ * How the level is played.
+ *  Instruction: top-down build view locked to the focused board (AHueBuilderPawn) + side "watch" view while a run
+ *               plays; modules come from each board's tray.
+ *  Sandbox:     free first-person maker (AHueboxCharacter) with a personal inventory and floor pickups.
+ */
+UENUM(BlueprintType)
+enum class EHuePlayMode : uint8
+{
+	Instruction,
+	Sandbox
+};
+
+/** Builder pawn view: placing modules from above, or watching the performance from the side. */
+UENUM(BlueprintType)
+enum class EHueViewMode : uint8
+{
+	Build,
+	Watch
+};
+
 UENUM(BlueprintType)
 enum class EHueFeedbackKind : uint8
 {
@@ -181,6 +202,14 @@ struct FHueColorEvent
 	EHueColor Color = EHueColor::N;
 };
 
+/** Where a live pulse is right now, for the minimap. CellPosition is fractional board-local cell coordinates:
+ *  (x, y) = centre of cell (x, y); a pulse halfway from (1,2) to (2,2) is at (1.5, 2). */
+struct FHuePulseSnapshot
+{
+	FVector2D CellPosition = FVector2D::ZeroVector;
+	EHueColor Color = EHueColor::B;
+};
+
 /** Snapshot of the reactive rig used to evaluate objectives (kept separate so objective logic is unit-testable). */
 struct FHueRigSample
 {
@@ -225,6 +254,9 @@ namespace HueModule
 	HUEBOX_API const TCHAR* ShortName(EHueModuleType Type);
 	/** Body colour used for the module's placeholder mesh. */
 	HUEBOX_API FLinearColor BodyColor(EHueModuleType Type);
+	/** Per-type accent (gray Turn, violet Colour shift, tan Delay, teal Mixer) for the Sandbox supply: floor pickups
+	 *  and hotbar swatches, where the type must read at a glance without a label. */
+	HUEBOX_API FLinearColor AccentColor(EHueModuleType Type);
 }
 
 namespace HueTime

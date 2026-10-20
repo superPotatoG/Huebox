@@ -4,8 +4,6 @@
 #include "UObject/Interface.h"
 #include "HueInteractable.generated.h"
 
-class AHueboxCharacter;
-
 UINTERFACE(MinimalAPI, BlueprintType)
 class UHueInteractable : public UInterface
 {
@@ -13,8 +11,10 @@ class UHueInteractable : public UInterface
 };
 
 /**
- * Anything the player can use with the Interact key (left mouse button): pickups, placed modules.
- * Call through IHueInteractable::Execute_Interact(Object, Character) so Blueprint implementations also work.
+ * Anything the player can use with the Interact action (left mouse button): pickups, placed modules.
+ * Interactor is the player pawn; implementations look up its UHueBuildToolComponent
+ * (Interactor->FindComponentByClass<UHueBuildToolComponent>()), so every pawn type works.
+ * Call through IHueInteractable::Execute_Interact(Object, Pawn) so Blueprint implementations also work.
  */
 class HUEBOX_API IHueInteractable
 {
@@ -23,9 +23,9 @@ class HUEBOX_API IHueInteractable
 public:
 	/** Short prompt for the HUD, e.g. "LMB  Collect Turn block". */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Hue|Interaction")
-	FString GetInteractPrompt(AHueboxCharacter* Interactor) const;
+	FString GetInteractPrompt(AActor* Interactor) const;
 
 	/** Returns true if something happened. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Hue|Interaction")
-	bool Interact(AHueboxCharacter* Interactor);
+	bool Interact(AActor* Interactor);
 };

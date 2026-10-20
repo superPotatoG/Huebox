@@ -11,6 +11,7 @@ class AHueReceiverBlock;
 class AReactiveRig;
 class UStaticMeshComponent;
 class UInstancedStaticMeshComponent;
+class UHueInventoryComponent;
 class UTextRenderComponent;
 class UMaterialInstanceDynamic;
 
@@ -64,6 +65,9 @@ public:
 
 	// ---- Mechanism & objectives -----------------------------------------------------------------------------
 	AReactiveRig* GetRig() const { return Rig; }
+
+	/** Instruction-mode module tray of this board (filled by the tutorial builder; collected blocks return here). */
+	UHueInventoryComponent* GetTray() const { return Tray; }
 	void SetRig(AReactiveRig* InRig);
 
 	const TArray<FHueObjective>& GetObjectives() const { return Objectives; }
@@ -148,6 +152,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
 	TObjectPtr<UTextRenderComponent> Title;
+
+	/** Default subobject: survives resets; Instruction-mode players place from it and collect back into it. */
+	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
+	TObjectPtr<UHueInventoryComponent> Tray;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> FloorMID;

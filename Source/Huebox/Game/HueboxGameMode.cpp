@@ -4,10 +4,14 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 #include "Blocks/HueModuleBlocks.h"
 #include "Game/ExhibitManager.h"
 #include "Game/HueTutorialBuilder.h"
+#include "Player/HueBuilderPawn.h"
 #include "Player/HueboxCharacter.h"
 #include "Player/HueboxPlayerController.h"
 #include "UI/HueboxHUD.h"
@@ -27,11 +31,20 @@ namespace HueGameModePrivate
 		default:                         return TSubclassOf<APulseBlock>();
 		}
 	}
+
+	const TCHAR* PlayModeName(EHuePlayMode Mode)
+	{
+		return Mode == EHuePlayMode::Sandbox ? TEXT("Sandbox") : TEXT("Instruction");
+	}
 }
 
 AHueboxGameMode::AHueboxGameMode()
 {
-	DefaultPawnClass = AHueboxCharacter::StaticClass();
+	BuilderPawnClass = AHueBuilderPawn::StaticClass();
+	SandboxPawnClass = AHueboxCharacter::StaticClass();
+	// Only a fallback (editor "Default Pawn Class" field, other code asking DefaultPawnClass directly):
+	// GetDefaultPawnClassForController picks the class of the resolved play mode.
+	DefaultPawnClass = BuilderPawnClass;
 	PlayerControllerClass = AHueboxPlayerController::StaticClass();
 	HUDClass = AHueboxHUD::StaticClass();
 	TutorialBuilderClass = AHueTutorialBuilder::StaticClass();
@@ -40,6 +53,68 @@ AHueboxGameMode::AHueboxGameMode()
 	{
 		ModuleClasses.Add(Type, HueGameModePrivate::NativeModuleClass(Type));
 	}
+}
+
+void AHueboxGameMode::InitGame(const FString& MapName, const FString& Options, FString& ErrorMessage)
+{
+	Super::InitGame(MapName, Options, ErrorMessage);
+
+	// Runs before any player is spawned, so GetDefaultPawnClassForController already sees the final mode.
+	// Precedence: URL option (?HueMode=...) > -HueSandbox switch > the class default.
+	const TCHAR* Source = TEXT("default");
+	const FString ModeOption = UGameplayStatics::ParseOption(Options, TEXT("HueMode"));
+	if (!ModeOption.IsEmpty())
+	{
+		if (ModeOption.Equals(TEXT("Sandbox"), ESearchCase::IgnoreCase))
+		{
+			PlayMode = EHuePlayMode::Sandbox;
+			Source = TEXT("?HueMode");
+		}
+		else if (ModeOption.Equals(TEXT("Instruction"), ESearchCase::IgnoreCase))
+		{
+			PlayMode = EHuePlayMode::Instruction;
+			Source = TEXT("?HueMode");
+		}
+		else
+		{
+			UE_LOG(LogHuebox, Warning, TEXT("HueboxGameMode: unknown ?HueMode=%s (expected Sandbox or Instruction) - ignored"), *ModeOption);
+		}
+	}
+	else if (FParse::Param(FCommandLine::Get(), TEXT("HueSandbox")))
+	{
+		PlayMode = EHuePlayMode::Sandbox;
+		Source = TEXT("-HueSandbox");
+	}
+
+	UE_LOG(LogHuebox, Display, TEXT("HueboxGameMode: play mode %s (%s)"), HueGameModePrivate::PlayModeName(PlayMode), Source);
+}
+
+UClass* AHueboxGameMode::GetDefaultPawnClassForController_Implementation(AController* InController)
+{
+	const TSubclassOf<APawn>& ModeClass = PlayMode == EHuePlayMode::Sandbox ? SandboxPawnClass : BuilderPawnClass;
+	if (ModeClass)
+	{
+		return ModeClass.Get();
+	}
+	// Cleared in a Blueprint subclass: DefaultPawnClass.
+	return Super::GetDefaultPawnClassForController_Implementation(InController);
+}
+
+EHuePlayMode AHueboxGameMode::GetPlayMode(const UObject* WorldContext)
+{
+	const UWorld* World = (WorldContext && GEngine)
+		? GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull)
+		: nullptr;
+
+	if (World)
+	{
+		if (const AHueboxGameMode* GameMode = Cast<AHueboxGameMode>(World->GetAuthGameMode()))
+		{
+			return GameMode->PlayMode;
+		}
+	}
+	// Tests / other game modes: the default experience.
+	return EHuePlayMode::Instruction;
 }
 
 void AHueboxGameMode::StartPlay()

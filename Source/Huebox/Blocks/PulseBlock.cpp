@@ -13,7 +13,7 @@
 
 #include "Game/ExhibitManager.h"
 #include "Grid/HueBoard.h"
-#include "Player/HueboxCharacter.h"
+#include "Player/HueBuildToolComponent.h"
 #include "Simulation/PulseSubsystem.h"
 
 namespace HueBlockPrivate
@@ -31,17 +31,36 @@ namespace HueBlockPrivate
 		return Name;
 	}
 
-	constexpr float LabelWorldSize = 22.f;
+	/** Nominal label size (cm); long labels shrink to fit between the port markers (FitLabelToTile). */
+	constexpr float LabelWorldSize = 26.f;
+	/** Label height above the top face (cm). */
+	constexpr float LabelLift = 1.f;
 	constexpr float FlashSeconds = 0.6f;
-	/** Distance of a port marker from the cell centre (cm). */
-	constexpr float PortMarkerOffset = 42.f;
-	/** How far the red flash "X" moves from the label centre towards the blocked face (cm). */
+	/** How far the flash "X" moves from the label centre towards the blocked face (cm). */
 	constexpr float FlashCrossOffset = 22.f;
 
+	/** Port markers sit at the tile edge but never further than this fraction of the cell size from the centre. */
+	constexpr float PortMarkerCellFraction = 0.40f;
+	/** Cell size assumed while a block is not registered on a board yet (cm). */
+	constexpr float DefaultCellSize = 100.f;
+	/** Free band kept between the label and the port markers, measured from the marker centre (cm): half the
+	 *  longest marker (8 cm) plus a visible gap, so text like "SRC B" never runs into an output arrow. */
+	constexpr float LabelMarkerClearance = 14.f;
+
+	/** Highlight: blend of the body towards a light amber (visible on white and on coloured tiles). */
+	constexpr float HighlightBlend = 0.35f;
+	const FLinearColor HighlightTint(1.0f, 0.82f, 0.4f);
 	const FLinearColor FlashBodyColor(0.85f, 0.08f, 0.06f);
-	const FLinearColor InputMarkerColor(0.1f, 0.1f, 0.12f);
-	const FLinearColor OutputMarkerColor(0.92f, 0.92f, 0.88f);
-	const FLinearColor BothMarkerColor(0.7f, 0.7f, 0.72f);
+	/** The flash cross is light so it reads on the red tile. */
+	const FColor FlashCrossColor(250, 250, 245);
+	/** Dark ink for labels and port markers. */
+	const FLinearColor TileInkColor(0.08f, 0.08f, 0.08f);
+	const FLinearColor MarkerColor(0.06f, 0.06f, 0.07f);
+
+	/** Marker sizes in units of the 100 cm engine shapes (all 2 cm thick except the 8 cm output cone). */
+	const FVector InputMarkerScale(0.14f, 0.14f, 0.02f);	// square
+	const FVector OutputMarkerScale(0.08f, 0.16f, 0.16f);	// cone, see RebuildPortMarkers: X = thickness, Y = width, Z = length
+	const FVector BothMarkerScale(0.16f, 0.06f, 0.02f);		// bar, X = length along the face normal
 
 	/**
 	 * Weak cache + LoadObject fallback for shared engine assets used outside constructors. A weak pointer never
@@ -96,7 +115,8 @@ APulseBlock::APulseBlock()
 
 	Label = CreateDefaultSubobject<UTextRenderComponent>(TEXT("Label"));
 	Label->SetupAttachment(SceneRoot);
-	// Lies on the top face (faces +Z) and reads along +X for the viewer standing north of the board.
+	// Lies on the top face (faces +Z), reads along +X with the letter tops towards -Y: upright in the top-down
+	// build view (screen right = +X, screen up = -Y) and for a sandbox viewer standing north of the board.
 	Label->SetRelativeRotation(FRotationMatrix::MakeFromXY(FVector::UpVector, -FVector::ForwardVector).Rotator());
 	Label->SetHorizontalAlignment(EHTA_Center);
 	Label->SetVerticalAlignment(EVRTA_TextCenter);
@@ -174,6 +194,14 @@ void APulseBlock::InitializeOnBoard(AHueBoard* Board, FIntPoint InCell)
 {
 	OwningBoard = Board;
 	Cell = InCell;
+
+	// Spawn order is BeginPlay -> SetFacing -> register, so the markers were laid out for the default cell size.
+	// Redo them (and the label fit) only if this board's cell size actually moves the markers.
+	if (HasActorBegunPlay() && !FMath::IsNearlyEqual(GetPortMarkerOffset(), PortMarkerOffsetInUse))
+	{
+		RebuildPortMarkers();
+		ApplyLabel();
+	}
 }
 
 void APulseBlock::SetFacing(EHueDir NewFacing)
@@ -233,7 +261,8 @@ void APulseBlock::RefreshVisuals()
 	}
 	else if (bHighlighted)
 	{
-		Body = BaseColor + (FLinearColor::White - BaseColor) * 0.35f;
+		// Slight amber tint: lightening alone would be invisible on the white module tiles.
+		Body = BaseColor + (HueBlockPrivate::HighlightTint - BaseColor) * HueBlockPrivate::HighlightBlend;
 		Body.A = 1.f;
 	}
 	SetBodyColor(Body);
@@ -242,7 +271,7 @@ void APulseBlock::RefreshVisuals()
 
 // ---- IHueInteractable -------------------------------------------------------------------------------------
 
-FString APulseBlock::GetInteractPrompt_Implementation(AHueboxCharacter* Interactor) const
+FString APulseBlock::GetInteractPrompt_Implementation(AActor* Interactor) const
 {
 	if (!bRemovable)
 	{
@@ -257,10 +286,11 @@ FString APulseBlock::GetInteractPrompt_Implementation(AHueboxCharacter* Interact
 	return FString::Printf(TEXT("LMB  Collect %s"), *GetDisplayName());
 }
 
-bool APulseBlock::Interact_Implementation(AHueboxCharacter* Interactor)
+bool APulseBlock::Interact_Implementation(AActor* Interactor)
 {
-	// The character owns the rules (fixed units, editing state, inventory capacity).
-	return IsValid(Interactor) && Interactor->TryCollectBlock(this);
+	// The pawn's build tool owns the rules (fixed units, editing state, inventory capacity), whatever the pawn type.
+	UHueBuildToolComponent* Tool = IsValid(Interactor) ? Interactor->FindComponentByClass<UHueBuildToolComponent>() : nullptr;
+	return Tool && Tool->TryCollectBlock(this);
 }
 
 // ---- Shared placeholder assets ----------------------------------------------------------------------------
@@ -383,6 +413,7 @@ void APulseBlock::RebuildPortMarkers()
 		}
 	}
 	PortMarkers.Reset();
+	PortMarkerOffsetInUse = GetPortMarkerOffset();
 
 	// Runtime-only presentation: never create components in editor / preview worlds.
 	const UWorld* World = GetWorld();
@@ -394,32 +425,33 @@ void APulseBlock::RebuildPortMarkers()
 	TArray<FHuePort> Ports;
 	GetPorts(Ports);
 
-	const float MarkerZ = BodyScale.Z * 50.f;
+	const float TopZ = static_cast<float>(BodyScale.Z) * 100.f;
 	for (const FHuePort& Port : Ports)
 	{
 		// Markers hang off the unrotated SceneRoot, so the board-local face direction is used directly.
 		const FVector Dir = HueDir::ToVector(Port.Face);
 
+		// Flat dark shapes that read from straight above.
 		UStaticMesh* Mesh = nullptr;
-		FVector Scale = FVector(0.16f);
+		FVector Scale = HueBlockPrivate::InputMarkerScale;
 		FRotator Rotation = FRotator::ZeroRotator;
-		FLinearColor Color = HueBlockPrivate::InputMarkerColor;
 		switch (Port.Kind)
 		{
 		case EHuePortKind::Input:
-			Mesh = GetCubeMesh();
+			Mesh = GetCubeMesh(); // small square
 			break;
 		case EHuePortKind::Output:
+			// Cone lying on the face with its tip (local +Z) pointing out of the face and local X up, so the X
+			// scale is the thickness: seen from above it is a triangle pointing outward.
 			Mesh = GetConeMesh();
-			Scale = FVector(0.2f);
-			Rotation = FRotationMatrix::MakeFromZ(Dir).Rotator(); // cone tip points out of the face
-			Color = HueBlockPrivate::OutputMarkerColor;
+			Scale = HueBlockPrivate::OutputMarkerScale;
+			Rotation = FRotationMatrix::MakeFromZX(Dir, FVector::UpVector).Rotator();
 			break;
 		case EHuePortKind::Both:
-			Mesh = GetCylinderMesh();
-			Scale = FVector(0.16f, 0.16f, 0.12f);
-			Rotation = FRotationMatrix::MakeFromZ(Dir).Rotator(); // short stub along the face normal
-			Color = HueBlockPrivate::BothMarkerColor;
+			// Bar along the face normal; the two bars of a turn outline its corner path.
+			Mesh = GetCubeMesh();
+			Scale = HueBlockPrivate::BothMarkerScale;
+			Rotation = FRotator(0.f, HueDir::ToYaw(Port.Face), 0.f);
 			break;
 		}
 		if (!Mesh)
@@ -427,11 +459,20 @@ void APulseBlock::RebuildPortMarkers()
 			continue;
 		}
 
+		// Place by the mesh bounds so the result does not depend on where the basic shape's pivot is: bounds
+		// centre at the port edge (inside the cell footprint), bottom resting on the top face.
+		const FBox Placed = Mesh->GetBoundingBox().TransformBy(FTransform(Rotation, FVector::ZeroVector, Scale));
+		const FVector PlacedCenter = Placed.GetCenter();
+		const FVector Location(
+			Dir.X * PortMarkerOffsetInUse - PlacedCenter.X,
+			Dir.Y * PortMarkerOffsetInUse - PlacedCenter.Y,
+			TopZ - Placed.Min.Z);
+
 		// Owned by this actor; the UPROPERTY array keeps it reachable until it is destroyed on the next rebuild.
 		UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(this, NAME_None, RF_Transient);
 		Marker->SetStaticMesh(Mesh);
 		Marker->SetupAttachment(SceneRoot);
-		Marker->SetRelativeLocation(Dir * HueBlockPrivate::PortMarkerOffset + FVector(0.f, 0.f, MarkerZ));
+		Marker->SetRelativeLocation(Location);
 		Marker->SetRelativeRotation(Rotation);
 		Marker->SetRelativeScale3D(Scale);
 		// Traceable (aiming at a marker targets this block) but never blocks movement or physics.
@@ -441,9 +482,18 @@ void APulseBlock::RebuildPortMarkers()
 		Marker->SetGenerateOverlapEvents(false);
 		Marker->SetCastShadow(false);
 		Marker->RegisterComponent();
-		MakeColorMID(Marker, Color);
+		MakeColorMID(Marker, HueBlockPrivate::MarkerColor);
 		PortMarkers.Add(Marker);
 	}
+}
+
+float APulseBlock::GetPortMarkerOffset() const
+{
+	const AHueBoard* Board = OwningBoard.Get();
+	const float CellSize = Board ? Board->GetCellSize() : HueBlockPrivate::DefaultCellSize;
+	const float TileHalf = static_cast<float>(FMath::Min(BodyScale.X, BodyScale.Y)) * 50.f;
+	// 100 cm cells: 40 cm for every tile size, i.e. on the edge of the 80 cm module tiles.
+	return FMath::Min(TileHalf, CellSize * HueBlockPrivate::PortMarkerCellFraction);
 }
 
 // ---- Helpers ----------------------------------------------------------------------------------------------
@@ -510,18 +560,44 @@ void APulseBlock::ApplyLabel()
 		return;
 	}
 
-	const FVector RestLocation(0.f, 0.f, BodyScale.Z * 100.f + 1.f);
+	const FVector RestLocation(0.f, 0.f, BodyScale.Z * 100.f + HueBlockPrivate::LabelLift);
 	if (bFlashing)
 	{
+		// Light cross on the red tile, shifted towards the blocked face.
 		Label->SetText(FText::FromString(TEXT("X")));
-		Label->SetTextRenderColor(FColor(255, 40, 30));
+		Label->SetTextRenderColor(HueBlockPrivate::FlashCrossColor);
 		Label->SetRelativeLocation(RestLocation + HueDir::ToVector(FlashFace) * HueBlockPrivate::FlashCrossOffset);
 	}
 	else
 	{
 		Label->SetText(FText::FromString(LabelString));
-		Label->SetTextRenderColor(LabelColor.ToFColor(true));
+		// TextRenderColor reaches the text material as a raw vertex colour, so convert linearly: the 0.08 ink
+		// then renders dark (an sRGB conversion would store 79/255, a mid gray).
+		Label->SetTextRenderColor(LabelColor.ToFColor(/*bSRGB*/ false));
 		Label->SetRelativeLocation(RestLocation);
+	}
+	FitLabelToTile();
+}
+
+void APulseBlock::FitLabelToTile()
+{
+	if (!Label)
+	{
+		return;
+	}
+
+	// Measure at the nominal size, then shrink to the free square between the edge markers (text bounds scale
+	// linearly with WorldSize). Local text bounds: Y = width, Z = height. Empty text measures 0.
+	Label->SetWorldSize(HueBlockPrivate::LabelWorldSize);
+	const FVector TextSize = Label->GetTextLocalSize();
+	const float Largest = static_cast<float>(FMath::Max(TextSize.Y, TextSize.Z));
+
+	const float TileWidth = static_cast<float>(FMath::Min(BodyScale.X, BodyScale.Y)) * 100.f;
+	const float MarkerFree = 2.f * (GetPortMarkerOffset() - HueBlockPrivate::LabelMarkerClearance);
+	const float MaxExtent = FMath::Max(10.f, FMath::Min(MarkerFree, TileWidth - 4.f));
+	if (Largest > MaxExtent)
+	{
+		Label->SetWorldSize(HueBlockPrivate::LabelWorldSize * MaxExtent / Largest);
 	}
 }
 
@@ -567,6 +643,11 @@ FString APulseBlock::FormatOutput(EHueColor Color, EHueDir Dir, int64 TimeMs)
 FLinearColor APulseBlock::ContrastTextColor(const FLinearColor& Background)
 {
 	return Background.GetLuminance() > 0.25f
-		? FLinearColor(0.02f, 0.02f, 0.025f)
+		? TileLabelColor()
 		: FLinearColor(0.95f, 0.95f, 0.95f);
+}
+
+FLinearColor APulseBlock::TileLabelColor()
+{
+	return HueBlockPrivate::TileInkColor;
 }

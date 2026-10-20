@@ -520,6 +520,12 @@ float AReactiveRig::GetCarriageSpeed() const
 	return static_cast<float>(FVector::DotProduct(Carriage->GetPhysicsLinearVelocity(), GetTrackDirection()));
 }
 
+FVector AReactiveRig::GetPerformerLocation() const
+{
+	// The figure rides on the carriage, so the physics body's location is where the performer is.
+	return IsValid(Carriage) ? Carriage->GetComponentLocation() : GetActorLocation();
+}
+
 FHueRigSample AReactiveRig::MakeSample() const
 {
 	FHueRigSample Sample;

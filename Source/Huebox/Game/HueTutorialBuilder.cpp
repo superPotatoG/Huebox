@@ -23,6 +23,7 @@
 #include "Game/ExhibitManager.h"
 #include "Game/HueboxGameMode.h"
 #include "Grid/HueBoard.h"
+#include "Player/HueInventoryComponent.h"
 #include "Player/HueModulePickup.h"
 #include "Rig/ReactiveRig.h"
 
@@ -141,6 +142,41 @@ namespace HueTutorialPrivate
 		}
 	}
 
+	/** Briefs are shared by both play modes; "{Supply}" names where this mode keeps the exercise's modules. */
+	FString ResolveBrief(const FString& Brief, EHuePlayMode Mode)
+	{
+		const TCHAR* const Supply = (Mode == EHuePlayMode::Sandbox)
+			? TEXT("Collect the modules on the floor")
+			: TEXT("Use the modules in this board's tray");
+		return Brief.Replace(TEXT("{Supply}"), Supply, ESearchCase::CaseSensitive);
+	}
+
+	/** Instruction mode: the layout's supply goes into the board's tray (instead of floor pickups); slot 1 selected. */
+	void FillTray(AHueBoard* Board, const FHueBoardLayout& Layout)
+	{
+		UHueInventoryComponent* Tray = IsValid(Board) ? Board->GetTray() : nullptr;
+		if (!IsValid(Tray))
+		{
+			UE_LOG(LogHuebox, Warning, TEXT("HueTutorialBuilder: '%s' has no tray - its supply was not handed out"), *Layout.Name);
+			return;
+		}
+
+		for (const FHuePickupSpec& PickupSpec : Layout.Pickups)
+		{
+			if (PickupSpec.Type == EHueModuleType::None || PickupSpec.Count <= 0)
+			{
+				continue;
+			}
+			const int32 Added = Tray->AddItem(PickupSpec.Type, PickupSpec.Count);
+			if (Added < PickupSpec.Count)
+			{
+				UE_LOG(LogHuebox, Warning, TEXT("HueTutorialBuilder: the tray of '%s' is full - %d of %d %s not added"),
+					*Layout.Name, PickupSpec.Count - Added, PickupSpec.Count, HueModule::DisplayName(PickupSpec.Type));
+			}
+		}
+		Tray->SelectSlot(0);
+	}
+
 	template <typename ActorType>
 	bool WorldHasActor(UWorld* World)
 	{
@@ -241,8 +277,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(0,
 			TEXT("1 \u00B7 Route a Signal"),
-			TEXT("The source fires one B pulse to the right, but a barrier blocks the way. Collect the modules on the floor, ")
-			TEXT("route the pulse up and around, and turn it into A so the dancer is pushed away from her partner.")));
+			TEXT("The source fires one B pulse to the right, but a barrier blocks the way. {Supply}, route the pulse up ")
+			TEXT("and around, and turn it into A so the dancer is pushed away from her partner.")));
 
 		Layout.Blocks = {
 			MakeSource(0, 4, EHueDir::East, EHueColor::B),
@@ -277,7 +313,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(1,
 			TEXT("2 \u00B7 Change Motion"),
 			TEXT("Two routes are ready. Route 1 turns B into A (push). Route 2 is a delayed B (pull). Try each alone by ")
-			TEXT("collecting a block, then run both: aim at the delay block and press Z/X so the pull arrives later. ")
+			TEXT("collecting a block, then run both: point at the delay block and press Z/X so the pull arrives later. ")
 			TEXT("Same-time arrivals cancel out.")));
 
 		// Route 1: A reaches R (West face) at 1.25 s. Route 2: B reaches R (South face) at 0.75 s + delay, so the
@@ -603,7 +639,8 @@ AHueBoard* AHueTutorialBuilder::BuildBoard(const FHueBoardLayout& Layout, int32 
 	SpawnedActors.Add(Board);
 	BoardToLayout.Add(TWeakObjectPtr<const AHueBoard>(Board), Index);
 	Board->SetGridSize(Layout.GridSize);
-	Board->SetTexts(Layout.Name, Layout.Brief);
+	const EHuePlayMode PlayMode = AHueboxGameMode::GetPlayMode(this);
+	Board->SetTexts(Layout.Name, HueTutorialPrivate::ResolveBrief(Layout.Brief, PlayMode));
 
 	// ---- Rig (deferred: TrackLength must be known before its construction lays out the track) ------------------
 	const FTransform RigTransform(BoardOrigin + Layout.RigOffset);
@@ -640,19 +677,28 @@ AHueBoard* AHueTutorialBuilder::BuildBoard(const FHueBoardLayout& Layout, int32 
 	}
 
 	// ---- Supply tray ----------------------------------------------------------------------------------------------
-	for (const FHuePickupSpec& PickupSpec : Layout.Pickups)
+	// Instruction: the modules go straight into the board's own tray (no floor pickups; collected blocks come back
+	// to it). Sandbox: they lie next to the board as pickups for the first-person maker, as before.
+	if (PlayMode == EHuePlayMode::Instruction)
 	{
-		if (PickupSpec.Type == EHueModuleType::None || PickupSpec.Count <= 0)
+		HueTutorialPrivate::FillTray(Board, Layout);
+	}
+	else
+	{
+		for (const FHuePickupSpec& PickupSpec : Layout.Pickups)
 		{
-			continue;
-		}
-		const FVector PickupLocation = BoardOrigin
-			+ FVector(PickupSpec.LocalPosition.X, PickupSpec.LocalPosition.Y, HueTutorialPrivate::PickupHeight);
-		AHueModulePickup* Pickup = World->SpawnActor<AHueModulePickup>(AHueModulePickup::StaticClass(), FTransform(PickupLocation), Params);
-		if (Pickup)
-		{
-			Pickup->SetContents(PickupSpec.Type, PickupSpec.Count);
-			SpawnedActors.Add(Pickup);
+			if (PickupSpec.Type == EHueModuleType::None || PickupSpec.Count <= 0)
+			{
+				continue;
+			}
+			const FVector PickupLocation = BoardOrigin
+				+ FVector(PickupSpec.LocalPosition.X, PickupSpec.LocalPosition.Y, HueTutorialPrivate::PickupHeight);
+			AHueModulePickup* Pickup = World->SpawnActor<AHueModulePickup>(AHueModulePickup::StaticClass(), FTransform(PickupLocation), Params);
+			if (Pickup)
+			{
+				Pickup->SetContents(PickupSpec.Type, PickupSpec.Count);
+				SpawnedActors.Add(Pickup);
+			}
 		}
 	}
 

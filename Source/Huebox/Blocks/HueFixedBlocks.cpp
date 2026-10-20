@@ -3,6 +3,16 @@
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
+// Named (not anonymous) namespace: unity builds merge several .cpp files into one translation unit.
+namespace HueFixedBlocksPrivate
+{
+	/** Sources and receivers: flat tiles slightly larger than the 80 cm modules, so fixed units stand out. */
+	const FVector FixedTileScale(0.86f, 0.86f, 0.06f);
+	/** Barrier: a near-black tile filling the cell, a little thicker. */
+	const FVector BarrierTileScale(0.98f, 0.98f, 0.1f);
+	const FLinearColor BarrierColor(0.04f, 0.04f, 0.045f);
+}
+
 // =============================================================================================================
 // Source
 // =============================================================================================================
@@ -12,8 +22,11 @@ AHueSourceBlock::AHueSourceBlock()
 	bRemovable = false;
 	ModuleType = EHueModuleType::None;
 	BlockDisplayName = TEXT("Source");
+	BodyScale = HueFixedBlocksPrivate::FixedTileScale;
+	ApplyBodyLayout();
+	// Tile in the emitted colour with dark ink.
 	BaseColor = HueColor::ToLinear(EmitColor);
-	SetLabelText(FString::Printf(TEXT("SRC %s"), HueColor::Label(EmitColor)), ContrastTextColor(BaseColor));
+	SetLabelText(FString::Printf(TEXT("SRC %s"), HueColor::Label(EmitColor)), TileLabelColor());
 }
 
 void AHueSourceBlock::GetPorts(TArray<FHuePort>& OutPorts) const
@@ -43,7 +56,7 @@ void AHueSourceBlock::RefreshVisuals()
 {
 	BaseColor = HueColor::ToLinear(EmitColor);
 	LabelString = FString::Printf(TEXT("SRC %s"), HueColor::Label(EmitColor));
-	LabelColor = ContrastTextColor(BaseColor);
+	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
 
@@ -69,8 +82,11 @@ AHueReceiverBlock::AHueReceiverBlock()
 	BlockDisplayName = TEXT("Receiver");
 	// Permissive default for receivers placed by hand; layouts always call SetAcceptFaces.
 	AcceptFaces = { EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South };
+	BodyScale = HueFixedBlocksPrivate::FixedTileScale;
+	ApplyBodyLayout();
+	// Tile in the currently held colour (N = white) with dark ink.
 	BaseColor = HueColor::ToLinear(CurrentColor);
-	SetLabelText(FString::Printf(TEXT("RCV %s"), HueColor::Label(CurrentColor)), ContrastTextColor(BaseColor));
+	SetLabelText(FString::Printf(TEXT("RCV %s"), HueColor::Label(CurrentColor)), TileLabelColor());
 }
 
 EPulseResponse AHueReceiverBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -187,7 +203,7 @@ void AHueReceiverBlock::RefreshVisuals()
 {
 	BaseColor = HueColor::ToLinear(CurrentColor);
 	LabelString = FString::Printf(TEXT("RCV %s"), HueColor::Label(CurrentColor));
-	LabelColor = ContrastTextColor(BaseColor);
+	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
 
@@ -229,10 +245,10 @@ AHueBarrierBlock::AHueBarrierBlock()
 	bRemovable = false;
 	ModuleType = EHueModuleType::None;
 	BlockDisplayName = TEXT("Barrier");
-	BaseColor = FLinearColor(0.12f, 0.12f, 0.12f);
-	BodyScale = FVector(0.98f, 0.98f, 0.9f);
+	BaseColor = HueFixedBlocksPrivate::BarrierColor;
+	BodyScale = HueFixedBlocksPrivate::BarrierTileScale;
 	ApplyBodyLayout();
-	SetLabelText(FString(), FLinearColor::White);
+	SetLabelText(FString(), TileLabelColor()); // no label: the dark tile speaks for itself
 }
 
 EPulseResponse AHueBarrierBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)

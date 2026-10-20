@@ -126,6 +126,23 @@ const TCHAR* HueModule::ShortName(EHueModuleType Type)
 
 FLinearColor HueModule::BodyColor(EHueModuleType Type)
 {
+	// "2D white props": every module is a white tile told apart by its dark label (TURN, A<>B, D 1.25s, MIX)
+	// and port markers, so colour on the grid always means a signal colour (sources, receivers, pulses).
+	static const FLinearColor ModuleWhite(0.92f, 0.92f, 0.90f);
+	static const FLinearColor Colors[5] =
+	{
+		FLinearColor(0.50f, 0.50f, 0.50f),	// None
+		ModuleWhite,						// Turn
+		ModuleWhite,						// Colour shift
+		ModuleWhite,						// Delay
+		ModuleWhite							// Mixer
+	};
+	return Colors[HueTypesPrivate::ModuleIndex(Type)];
+}
+
+FLinearColor HueModule::AccentColor(EHueModuleType Type)
+{
+	// The pre-2D body colours: the Sandbox supply (floor pickups, hotbar) keeps telling the types apart by colour.
 	static const FLinearColor Colors[5] =
 	{
 		FLinearColor(0.50f, 0.50f, 0.50f),	// None

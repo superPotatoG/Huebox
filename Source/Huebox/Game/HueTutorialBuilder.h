@@ -67,7 +67,8 @@ struct FHuePickupSpec
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	int32 Count = 1;
 
-	/** Board-local position in cm (0,0 = south-west corner of the grid). */
+	/** Board-local position in cm (0,0 = south-west corner of the grid) of the floor pickup. Sandbox only: in
+	 *  Instruction mode the stack goes into the board's tray. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	FVector2D LocalPosition = FVector2D::ZeroVector;
 };
@@ -81,6 +82,7 @@ struct FHueBoardLayout
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	FString Name;
 
+	/** "{Supply}" is replaced by where the current play mode keeps the modules (Sandbox: floor, Instruction: tray). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout", meta = (MultiLine = "true"))
 	FString Brief;
 
@@ -118,8 +120,9 @@ struct FHueBoardLayout
 
 /**
  * Builds the Level 1 "prototype table" at BeginPlay from data: three exercise boards (GDD 4: route a signal,
- * change motion, synthesize a stop), their rigs, supply pickups, titles, and - if the level has none - a
- * ground slab and lights. Layouts are plain USTRUCT data so designers can edit them in the details panel.
+ * change motion, synthesize a stop), their rigs, their module supply (Instruction mode: the board's tray; Sandbox mode:
+ * floor pickups), titles, and - if the level has none - a ground slab and lights. Layouts are plain USTRUCT data so
+ * designers can edit them in the details panel.
  */
 UCLASS()
 class HUEBOX_API AHueTutorialBuilder : public AActor

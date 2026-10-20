@@ -3,48 +3,23 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Core/HueTypes.h"
+#include "Player/HueBuildToolComponent.h"
 #include "HueboxCharacter.generated.h"
 
 class UCameraComponent;
-class UStaticMeshComponent;
-class UTextRenderComponent;
-class UMaterialInstanceDynamic;
 class UHueInventoryComponent;
 class UHueInputConfig;
-class APulseBlock;
 class AHueBoard;
-class AHueModulePickup;
 class APlayerController;
 class UDamageType;
 struct FInputActionValue;
 
-UENUM()
-enum class EHueTargetKind : uint8
-{
-	None,
-	Block,
-	Pickup,
-	Cell
-};
-
-/** What the crosshair currently points at. All object references are weak (selection never owns). */
-struct FHueInteractionTarget
-{
-	EHueTargetKind Kind = EHueTargetKind::None;
-	TWeakObjectPtr<APulseBlock> Block;
-	TWeakObjectPtr<AHueModulePickup> Pickup;
-	TWeakObjectPtr<AHueBoard> Board;
-	FIntPoint Cell = FIntPoint(INDEX_NONE, INDEX_NONE);
-	/** For Cell targets: can the selected module be placed here? */
-	bool bCanPlace = false;
-	/** Player-facing reason when bCanPlace is false. */
-	FString Reason;
-};
-
 /**
- * The maker: a first-person pawn (no visible body, GDD 5) that walks around the workbench with WASD and uses
- * the left mouse button to collect pickups, collect placed modules back into the inventory, or place the
- * selected module on the targeted empty cell. Input actions/mapping are created in C++ (UHueInputConfig).
+ * The maker in Sandbox mode (-HueSandbox / ?HueMode=Sandbox): a first-person pawn (no visible body, GDD 5) that
+ * walks around the workbench with WASD. All construction rules live in UHueBuildToolComponent: every tick the
+ * camera trace becomes the tool's target, and LMB (collect pickup / collect block / place the selected module),
+ * Q/E, Z/X, wheel and 1-6 are forwarded to it. The pawn keeps its own inventory (the tool's inventory source),
+ * floor drops (G) and the fall recovery. Input actions/mapping are created in C++ (UHueInputConfig).
  */
 UCLASS()
 class HUEBOX_API AHueboxCharacter : public ACharacter
@@ -62,18 +37,15 @@ public:
 	virtual void FellOutOfWorld(const UDamageType& DmgType) override;
 
 	UHueInventoryComponent* GetInventory() const { return Inventory; }
-	const FHueInteractionTarget& GetTarget() const { return Target; }
-	EHueDir GetPreviewFacing() const { return PreviewFacing; }
+	UHueBuildToolComponent* GetBuildTool() const { return BuildTool; }
+	/** Convenience forwards to the build tool (crosshair target / placement facing). */
+	const FHueInteractionTarget& GetTarget() const;
+	EHueDir GetPreviewFacing() const;
 	bool IsHelpVisible() const { return bShowHelp; }
 	bool IsPauseMenuOpen() const { return bPauseMenuOpen; }
 
-	/** Short message on the HUD (inventory full, cannot place, ...). Also forwarded to the exhibit feedback log. */
+	/** Short message on the HUD (fell out, nothing to drop, ...). Forwarded to the exhibit feedback log by the tool. */
 	void ShowMessage(EHueFeedbackKind Kind, const FString& Message);
-
-	/** Collects a placed block into the inventory (used by APulseBlock::Interact). */
-	bool TryCollectBlock(APulseBlock* Block);
-	/** Collects a pickup into the inventory (used by AHueModulePickup::Interact). Returns number taken. */
-	int32 TryCollectPickup(AHueModulePickup* Pickup);
 
 	/** Max interaction distance from the camera (cm). */
 	UPROPERTY(EditAnywhere, Category = "Hue|Interaction")
@@ -81,7 +53,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
-	/** Unhighlights the target and takes the mapping context off the player's input stack. */
+	/** Unbinds the tool's placement veto and takes the mapping context off the player's input stack. */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	// Input handlers ---------------------------------------------------------------------------------------
@@ -103,41 +75,26 @@ protected:
 	void EnsureInputConfig();
 	void AddMappingContext();
 
+	/** Camera line trace -> BuildTool->SetTargetFromHit (a miss clears the target). */
 	void UpdateTarget();
-	void UpdatePreview();
-	void ClearHighlight();
-	void RotateTargetOrPreview(int32 Steps);
-	void AdjustTargetDelay(int32 Steps);
-	bool TryPlaceSelected();
-	/** True if the pawn's capsule overlaps Cell of Board (cannot place a block on yourself). */
+	/** Placement veto (bound to BuildTool->CellBlockedQuery): true if the capsule overlaps Cell of Board. */
 	bool IsStandingOnCell(const AHueBoard* Board, FIntPoint Cell) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
 	TObjectPtr<UCameraComponent> Camera;
 
+	/** Personal inventory (Sandbox): the build tool pays from it and collects into it. */
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
 	TObjectPtr<UHueInventoryComponent> Inventory;
 
-	/** Ghost of the module that would be placed (absolute transform, no collision). */
+	/** Targeting, placement rules, ghost preview and highlight (shared with AHueBuilderPawn). */
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
-	TObjectPtr<UStaticMeshComponent> PreviewMesh;
-
-	/** Cone showing the preview facing. */
-	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
-	TObjectPtr<UStaticMeshComponent> PreviewArrow;
-
-	UPROPERTY(Transient)
-	TObjectPtr<UMaterialInstanceDynamic> PreviewMID;
+	TObjectPtr<UHueBuildToolComponent> BuildTool;
 
 	/** Runtime-created input actions + mapping context. Owned here so the GC keeps them alive. */
 	UPROPERTY(Transient)
 	TObjectPtr<UHueInputConfig> InputConfig;
 
-	FHueInteractionTarget Target;
-	/** Block currently highlighted (weak: it may be collected or destroyed at any time). */
-	TWeakObjectPtr<APulseBlock> HighlightedBlock;
-
-	EHueDir PreviewFacing = EHueDir::East;
 	bool bShowHelp = true;
 	bool bPauseMenuOpen = false;
 	bool bMappingAdded = false;
@@ -145,16 +102,10 @@ protected:
 private:
 	/** Removes the mapping context from the controller it was added to (unpossess / EndPlay). */
 	void RemoveMappingContext();
-	/** Build-state check through the exhibit manager (no manager => editing allowed). */
-	bool IsEditingAllowed() const;
-	/** Selects the first slot holding Type if the current selection is empty (after a collect). */
-	void SelectIfNothingSelected(EHueModuleType Type);
-	/** After placing / dropping the last module of the selected stack: selects the next filled slot (wrapping), if any. */
+	/** After dropping the last module of the selected stack: selects the next filled slot (wrapping), if any.
+	 *  (Same rule the build tool applies after a placement.) */
 	void SelectNextFilledSlotIfEmpty();
 
 	/** Controller whose local player received our mapping context. Weak: the pawn never keeps it alive. */
 	TWeakObjectPtr<APlayerController> MappedController;
-
-	/** Last preview colour state written to PreviewMID (-1 unknown, 0 invalid, 1 valid) to avoid redundant updates. */
-	int8 PreviewColorState = -1;
 };

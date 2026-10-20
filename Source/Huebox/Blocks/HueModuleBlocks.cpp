@@ -26,6 +26,9 @@ namespace HueModuleBlocksPrivate
 	}
 }
 
+// Presentation of every module: the base class' flat 80 x 80 x 6 cm tile ("2D white prop") in
+// HueModule::BodyColor with a dark label on the top face (TileLabelColor).
+
 // =============================================================================================================
 // Turn
 // =============================================================================================================
@@ -35,7 +38,7 @@ AHueTurnBlock::AHueTurnBlock()
 	ModuleType = EHueModuleType::Turn;
 	BlockDisplayName = TEXT("Turn");
 	BaseColor = HueModule::BodyColor(EHueModuleType::Turn);
-	SetLabelText(TEXT("TURN"), ContrastTextColor(BaseColor));
+	SetLabelText(TEXT("TURN"), TileLabelColor());
 }
 
 bool AHueTurnBlock::TryTurn(EHueDir TravelDir, EHueDir& OutExitDir) const
@@ -108,7 +111,7 @@ AHueColorShiftBlock::AHueColorShiftBlock()
 	ModuleType = EHueModuleType::ColorShift;
 	BlockDisplayName = TEXT("Colour shift");
 	BaseColor = HueModule::BodyColor(EHueModuleType::ColorShift);
-	SetLabelText(TEXT("A<>B"), ContrastTextColor(BaseColor));
+	SetLabelText(TEXT("A<>B"), TileLabelColor());
 }
 
 EPulseResponse AHueColorShiftBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -160,7 +163,7 @@ AHueDelayBlock::AHueDelayBlock()
 	ModuleType = EHueModuleType::Delay;
 	BlockDisplayName = TEXT("Delay");
 	BaseColor = HueModule::BodyColor(EHueModuleType::Delay);
-	SetLabelText(FString::Printf(TEXT("D %.2fs"), DelaySeconds), ContrastTextColor(BaseColor));
+	SetLabelText(FString::Printf(TEXT("D %.2fs"), DelaySeconds), TileLabelColor());
 }
 
 void AHueDelayBlock::OnConstruction(const FTransform& Transform)
@@ -277,7 +280,7 @@ void AHueDelayBlock::RefreshVisuals()
 	LabelString = bHolding
 		? FString::Printf(TEXT("D %.2fs<br>[%s]"), DelaySeconds, HueColor::Label(HeldPulse.Color))
 		: FString::Printf(TEXT("D %.2fs"), DelaySeconds);
-	LabelColor = ContrastTextColor(BaseColor);
+	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
 
@@ -301,7 +304,7 @@ AHueMixerBlock::AHueMixerBlock()
 	ModuleType = EHueModuleType::Mixer;
 	BlockDisplayName = TEXT("Mixer");
 	BaseColor = HueModule::BodyColor(EHueModuleType::Mixer);
-	SetLabelText(TEXT("MIX"), ContrastTextColor(BaseColor));
+	SetLabelText(TEXT("MIX"), TileLabelColor());
 }
 
 EHueDir AHueMixerBlock::GetInputFace(int32 Input) const
@@ -538,6 +541,6 @@ FString AHueMixerBlock::GetStateText() const
 void AHueMixerBlock::RefreshVisuals()
 {
 	LabelString = bWaiting ? TEXT("MIX...") : TEXT("MIX");
-	LabelColor = ContrastTextColor(BaseColor);
+	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }

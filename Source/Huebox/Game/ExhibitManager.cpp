@@ -18,6 +18,7 @@
 #include "Game/HueboxGameMode.h"
 #include "Game/HueTutorialBuilder.h"
 #include "Grid/HueBoard.h"
+#include "Player/HueBuilderPawn.h"
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
@@ -143,9 +144,15 @@ void AExhibitManager::PrepareVisualCheck()
 	AHueBoard* Board = Boards.IsValidIndex(BoardIndex) ? Boards[BoardIndex].Get() : nullptr;
 	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
-	if (Pawn && IsValid(Board))
+	if (AHueBuilderPawn* Builder = Cast<AHueBuilderPawn>(Pawn); Builder && IsValid(Board))
 	{
-		// Same spot as the player start of board 0: north of the grid, looking south and slightly down.
+		// Instruction: the build view frames the board itself (same index order: GetBoards()). With -HueShotRun the
+		// run below switches to the Watch view, which blends in over ViewBlendTime - shots need >= 1.5 s of run.
+		Builder->FocusBoardIndex(BoardIndex, /*bSnap*/ true);
+	}
+	else if (Pawn && IsValid(Board))
+	{
+		// Sandbox: same spot as the player start of board 0: north of the grid, looking south and slightly down.
 		const FVector Center = Board->GetWorldBounds().GetCenter();
 		Pawn->SetActorLocation(FVector(Center.X, Board->GetActorLocation().Y + 1200.f, Pawn->GetActorLocation().Z),
 			false, nullptr, ETeleportType::TeleportPhysics);
@@ -248,11 +255,21 @@ void AExhibitManager::Tick(float DeltaSeconds)
 	}
 	else if ((State == EHueRunState::Complete || State == EHueRunState::Ended) && !bSelfTestActive)
 	{
-		// A finished attempt must not lock the rest of the level: once the player walks up to another board, the
-		// old attempt is released (quiet reset), so editing, Space and the HUD follow the player to the new board.
+		// A finished attempt must not lock the rest of the level: once the player walks up to (or focuses) another
+		// board, the old attempt is released (quiet reset), so editing, Space and the HUD follow the player there.
 		const APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 		const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
-		AHueBoard* Near = Pawn ? FindBoardNear(Pawn->GetActorLocation()) : nullptr;
+		AHueBoard* Near = nullptr;
+		if (const AHueBuilderPawn* Builder = Cast<AHueBuilderPawn>(Pawn))
+		{
+			// Instruction: the board the build view now focuses (Tab), right away - not only once the camera has
+			// glided over it (it may pass over a board in between).
+			Near = Builder->GetFocusedBoard();
+		}
+		if (!IsValid(Near) && Pawn)
+		{
+			Near = FindBoardNear(Pawn->GetActorLocation());
+		}
 		if (IsValid(Near) && Near != ActiveBoard)
 		{
 			const FString Finished = ActiveBoard->GetBoardName();

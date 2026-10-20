@@ -1,18 +1,14 @@
 #include "Player/HueboxCharacter.h"
 
-#include "Blocks/HueModuleBlocks.h"
-#include "Blocks/PulseBlock.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Components/StaticMeshComponent.h"
+#include "Engine/HitResult.h"
 #include "Engine/LocalPlayer.h"
-#include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Game/ExhibitManager.h"
-#include "Game/HueboxGameMode.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
@@ -21,15 +17,11 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
-#include "Materials/MaterialInstanceDynamic.h"
-#include "Materials/MaterialInterface.h"
 #include "Player/HueInputConfig.h"
-#include "Player/HueInteractable.h"
 #include "Player/HueInventoryComponent.h"
 #include "Player/HueModulePickup.h"
 #include "Player/HueboxPlayerController.h"
 #include "TimerManager.h"
-#include "UObject/ConstructorHelpers.h"
 
 namespace HueCharacterTuning
 {
@@ -38,14 +30,6 @@ namespace HueCharacterTuning
 	static constexpr float EyeHeight = 64.f;
 	static constexpr float WalkSpeed = 450.f;
 
-	/** Preview ghost matches the module body (BodyScale 0.7 x 0.7 x 0.5, centre 25 cm above the board top). */
-	static const FVector PreviewScale(0.7f, 0.7f, 0.5f);
-	static constexpr float PreviewHeight = 25.f;
-	static constexpr float PreviewArrowScale = 0.25f;
-	static constexpr float PreviewArrowOffset = 40.f;
-	static const FLinearColor PreviewValid(0.2f, 0.9f, 0.3f);
-	static const FLinearColor PreviewInvalid(0.9f, 0.2f, 0.2f);
-
 	static constexpr float DropDistance = 120.f;
 	static constexpr float DropHeightAboveFloor = 30.f;
 
@@ -53,18 +37,15 @@ namespace HueCharacterTuning
 	static const FVector FallbackRespawnLocation(300.f, 1200.f, 120.f);
 	static constexpr float FallbackRespawnYaw = -90.f;
 
-	/** A placed block is ~50 cm tall; anything whose feet are below this above the board top would intersect it. */
+	/** Feet below this height above the board top count as standing on a cell (conservative: placed modules are
+	 *  flat tiles now, but a block must never be placed into the capsule). */
 	static constexpr float BlockClearance = 100.f;
 }
 
 namespace HueCharacterText
 {
-	static const TCHAR* SelectModule = TEXT("Select a module (1-6 / wheel)");
 	static const TCHAR* ResetBeforeEditing = TEXT("Reset the run (R) before editing");
-	static const TCHAR* InventoryFull = TEXT("Inventory full");
-	static const TCHAR* FixedUnits = TEXT("Fixed units cannot be removed");
 	static const TCHAR* StandingOnCell = TEXT("Step off this cell to place here");
-	static const TCHAR* CannotPlace = TEXT("Cannot place here");
 }
 
 AHueboxCharacter::AHueboxCharacter()
@@ -100,62 +81,25 @@ AHueboxCharacter::AHueboxCharacter()
 
 	Inventory = CreateDefaultSubobject<UHueInventoryComponent>(TEXT("Inventory"));
 
-	// Constructor-only asset lookups.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> ConeFinder(TEXT("/Engine/BasicShapes/Cone.Cone"));
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MaterialFinder(TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
-
-	// Preview components live on the pawn (so they are owned and destroyed with it) but use absolute transforms,
-	// so they stay on the targeted cell instead of following the camera.
-	auto SetupPreviewComponent = [](UStaticMeshComponent* Component, UStaticMesh* MeshAsset, UMaterialInterface* Material, const FVector& Scale)
-	{
-		Component->SetUsingAbsoluteLocation(true);
-		Component->SetUsingAbsoluteRotation(true);
-		Component->SetUsingAbsoluteScale(true);
-		Component->SetRelativeScale3D(Scale);
-		if (MeshAsset)
-		{
-			Component->SetStaticMesh(MeshAsset);
-		}
-		if (Material)
-		{
-			Component->SetMaterial(0, Material);
-		}
-		Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		Component->SetGenerateOverlapEvents(false);
-		Component->SetCanEverAffectNavigation(false);
-		Component->SetCastShadow(false);
-		Component->SetVisibility(false);
-	};
-
-	PreviewMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PreviewMesh"));
-	PreviewMesh->SetupAttachment(GetCapsuleComponent());
-	SetupPreviewComponent(PreviewMesh, CubeFinder.Object, MaterialFinder.Object, HueCharacterTuning::PreviewScale);
-
-	PreviewArrow = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PreviewArrow"));
-	PreviewArrow->SetupAttachment(GetCapsuleComponent());
-	SetupPreviewComponent(PreviewArrow, ConeFinder.Object, MaterialFinder.Object, FVector(HueCharacterTuning::PreviewArrowScale));
+	// The tool creates its placement ghost on this pawn at BeginPlay (runtime components, absolute transforms).
+	BuildTool = CreateDefaultSubobject<UHueBuildToolComponent>(TEXT("BuildTool"));
 }
 
 // ---- Lifecycle ----------------------------------------------------------------------------------------------
 
 void AHueboxCharacter::BeginPlay()
 {
+	// Components (the build tool included) begin play inside Super.
 	Super::BeginPlay();
 
-	UMaterialInterface* BaseMaterial = APulseBlock::GetBasicMaterial();
-	if (!BaseMaterial && PreviewMesh)
+	if (BuildTool)
 	{
-		BaseMaterial = PreviewMesh->GetMaterial(0);
+		// Sandbox: the personal inventory pays for placements; cells under the capsule are vetoed. BindUObject is
+		// weak on this pawn, and EndPlay unbinds it anyway.
+		BuildTool->SetInventory(Inventory);
+		BuildTool->CellBlockedReason = HueCharacterText::StandingOnCell;
+		BuildTool->CellBlockedQuery.BindUObject(this, &AHueboxCharacter::IsStandingOnCell);
 	}
-	if (BaseMaterial && PreviewMesh && PreviewArrow)
-	{
-		// One MID shared by ghost and arrow; the Transient UPROPERTY keeps it referenced.
-		PreviewMID = UMaterialInstanceDynamic::Create(BaseMaterial, this);
-		PreviewMesh->SetMaterial(0, PreviewMID);
-		PreviewArrow->SetMaterial(0, PreviewMID);
-	}
-	PreviewColorState = -1;
 
 	EnsureInputConfig();
 	// The controller may already be set (e.g. a pawn placed in the level with auto-possess).
@@ -164,13 +108,11 @@ void AHueboxCharacter::BeginPlay()
 
 void AHueboxCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// Only touch the block when it outlives us; on level teardown every actor is going away anyway.
-	if (EndPlayReason == EEndPlayReason::Destroyed || EndPlayReason == EEndPlayReason::RemovedFromWorld)
+	// Before Super (which ends the tool's play): the tool unhighlights and destroys its own preview.
+	if (BuildTool)
 	{
-		ClearHighlight();
+		BuildTool->CellBlockedQuery.Unbind();
 	}
-	HighlightedBlock.Reset();
-	Target = FHueInteractionTarget();
 
 	RemoveMappingContext();
 
@@ -222,21 +164,18 @@ void AHueboxCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	if (!BuildTool)
+	{
+		return;
+	}
 	if (!IsLocallyControlled())
 	{
-		if (PreviewMesh)
-		{
-			PreviewMesh->SetVisibility(false);
-		}
-		if (PreviewArrow)
-		{
-			PreviewArrow->SetVisibility(false);
-		}
+		// No crosshair for remote / AI-driven copies: no target => no ghost, no highlight.
+		BuildTool->ClearTarget();
 		return;
 	}
 
 	UpdateTarget();
-	UpdatePreview();
 }
 
 // ---- Input setup --------------------------------------------------------------------------------------------
@@ -370,74 +309,68 @@ void AHueboxCharacter::HandleLook(const FInputActionValue& Value)
 
 void AHueboxCharacter::HandleInteract()
 {
-	switch (Target.Kind)
+	if (!BuildTool)
 	{
-	case EHueTargetKind::Pickup:
-		if (AHueModulePickup* Pickup = Target.Pickup.Get())
-		{
-			IHueInteractable::Execute_Interact(Pickup, this);
-		}
-		break;
-
-	case EHueTargetKind::Block:
-		if (APulseBlock* Block = Target.Block.Get())
-		{
-			IHueInteractable::Execute_Interact(Block, this);
-		}
-		break;
-
-	case EHueTargetKind::Cell:
-		TryPlaceSelected();
-		break;
-
-	case EHueTargetKind::None:
-	default:
-		break;
+		return;
 	}
 
-	// The world under the crosshair just changed (block removed / placed, pickup gone): refresh immediately.
+	// Pickup -> collect, block -> collect, empty cell -> place (the tool refreshes its target afterwards).
+	BuildTool->PrimaryAction();
+
+	// The world under the crosshair just changed (block removed / placed, pickup gone): re-aim immediately.
 	UpdateTarget();
-	UpdatePreview();
 }
 
 void AHueboxCharacter::HandleRotateLeft()
 {
-	RotateTargetOrPreview(-1);
+	if (BuildTool)
+	{
+		BuildTool->RotateTargetOrPreview(-1);
+	}
 }
 
 void AHueboxCharacter::HandleRotateRight()
 {
-	RotateTargetOrPreview(+1);
+	if (BuildTool)
+	{
+		BuildTool->RotateTargetOrPreview(+1);
+	}
 }
 
 void AHueboxCharacter::HandleDelayDown()
 {
-	AdjustTargetDelay(-1);
+	if (BuildTool)
+	{
+		BuildTool->AdjustTargetDelay(-1);
+	}
 }
 
 void AHueboxCharacter::HandleDelayUp()
 {
-	AdjustTargetDelay(+1);
+	if (BuildTool)
+	{
+		BuildTool->AdjustTargetDelay(+1);
+	}
 }
 
 void AHueboxCharacter::HandleHotbarScroll(const FInputActionValue& Value)
 {
 	const float Axis = Value.Get<float>();
-	if (!Inventory || FMath::IsNearlyZero(Axis))
+	if (!BuildTool || FMath::IsNearlyZero(Axis))
 	{
 		return;
 	}
 	// Wheel up = previous slot.
-	Inventory->CycleSelection(Axis > 0.f ? -1 : +1);
+	BuildTool->CycleSelection(Axis > 0.f ? -1 : +1);
 }
 
 void AHueboxCharacter::HandleHotbarSlot(const FInputActionValue& Value)
 {
 	// Keys 1..6 are scaled to 1..6 by the mapping's scalar modifier.
 	const int32 SlotNumber = FMath::RoundToInt(Value.Get<float>());
-	if (Inventory && SlotNumber >= 1)
+	if (BuildTool && SlotNumber >= 1)
 	{
-		Inventory->SelectSlot(SlotNumber - 1);
+		BuildTool->SelectSlot(SlotNumber - 1);
 	}
 }
 
@@ -454,7 +387,7 @@ void AHueboxCharacter::HandleDrop()
 		ShowMessage(EHueFeedbackKind::Info, TEXT("Nothing selected to drop"));
 		return;
 	}
-	if (!IsEditingAllowed())
+	if (BuildTool && !BuildTool->IsEditingAllowed())
 	{
 		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::ResetBeforeEditing);
 		return;
@@ -547,143 +480,36 @@ void AHueboxCharacter::HandlePauseMenu()
 	}
 }
 
-// ---- Targeting & preview ------------------------------------------------------------------------------------
+// ---- Targeting ----------------------------------------------------------------------------------------------
 
 void AHueboxCharacter::UpdateTarget()
 {
-	FHueInteractionTarget NewTarget;
+	if (!BuildTool)
+	{
+		return;
+	}
 
 	UWorld* World = GetWorld();
-	if (World && Camera)
+	if (!World || !Camera)
 	{
-		const FVector Start = Camera->GetComponentLocation();
-		const FVector End = Start + Camera->GetForwardVector() * InteractRange;
-
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(HueInteractTrace), /*bTraceComplex*/ false, this);
-		FHitResult Hit;
-		if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
-		{
-			AActor* HitActor = Hit.GetActor();
-
-			if (APulseBlock* Block = Cast<APulseBlock>(HitActor))
-			{
-				NewTarget.Kind = EHueTargetKind::Block;
-				NewTarget.Block = Block;
-				NewTarget.Board = Block->GetBoard();
-				NewTarget.Cell = Block->GetCell();
-			}
-			else if (AHueModulePickup* Pickup = Cast<AHueModulePickup>(HitActor))
-			{
-				NewTarget.Kind = EHueTargetKind::Pickup;
-				NewTarget.Pickup = Pickup;
-			}
-			else if (AHueBoard* Board = Cast<AHueBoard>(HitActor))
-			{
-				FIntPoint Cell;
-				if (Board->WorldToCell(Hit.ImpactPoint, Cell))
-				{
-					NewTarget.Board = Board;
-					NewTarget.Cell = Cell;
-
-					if (APulseBlock* Occupant = Board->GetBlockAt(Cell))
-					{
-						// Aiming at the floor beside a block's body still targets that block.
-						NewTarget.Kind = EHueTargetKind::Block;
-						NewTarget.Block = Occupant;
-					}
-					else
-					{
-						NewTarget.Kind = EHueTargetKind::Cell;
-
-						const EHueModuleType Selected = Inventory ? Inventory->GetSelectedType() : EHueModuleType::None;
-						if (Selected == EHueModuleType::None)
-						{
-							NewTarget.Reason = HueCharacterText::SelectModule;
-						}
-						else if (!Board->CanPlaceAt(Cell, &NewTarget.Reason))
-						{
-							if (NewTarget.Reason.IsEmpty())
-							{
-								NewTarget.Reason = HueCharacterText::CannotPlace;
-							}
-						}
-						else if (IsStandingOnCell(Board, Cell))
-						{
-							NewTarget.Reason = HueCharacterText::StandingOnCell;
-						}
-						else
-						{
-							NewTarget.bCanPlace = true;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Highlight follows the block target. Both sides are weak: either block may be gone by now.
-	APulseBlock* NewHighlight = (NewTarget.Kind == EHueTargetKind::Block) ? NewTarget.Block.Get() : nullptr;
-	APulseBlock* OldHighlight = HighlightedBlock.Get();
-	if (NewHighlight != OldHighlight)
-	{
-		if (OldHighlight)
-		{
-			OldHighlight->SetHighlighted(false);
-		}
-		if (NewHighlight)
-		{
-			NewHighlight->SetHighlighted(true);
-		}
-		HighlightedBlock = NewHighlight;
-	}
-
-	Target = MoveTemp(NewTarget);
-}
-
-void AHueboxCharacter::UpdatePreview()
-{
-	if (!PreviewMesh || !PreviewArrow)
-	{
+		BuildTool->ClearTarget();
 		return;
 	}
 
-	const EHueModuleType Selected = Inventory ? Inventory->GetSelectedType() : EHueModuleType::None;
-	const AHueBoard* Board = Target.Board.Get();
-	const bool bShow = Target.Kind == EHueTargetKind::Cell && Board != nullptr && Selected != EHueModuleType::None;
+	const FVector Start = Camera->GetComponentLocation();
+	const FVector End = Start + Camera->GetForwardVector() * InteractRange;
 
-	PreviewMesh->SetVisibility(bShow);
-	PreviewArrow->SetVisibility(bShow);
-	if (!bShow)
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(HueInteractTrace), /*bTraceComplex*/ false, this);
+	FHitResult Hit;
+	if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
 	{
-		return;
+		// Block / pickup / board floor cell classification and the placement rules are the tool's job.
+		BuildTool->SetTargetFromHit(Hit);
 	}
-
-	// Boards are unrotated, so board-local directions are world directions.
-	const FVector CellCenter = Board->CellToWorld(Target.Cell);
-	const FVector Facing = HueDir::ToVector(PreviewFacing);
-	const FVector Lift(0.f, 0.f, HueCharacterTuning::PreviewHeight);
-
-	PreviewMesh->SetWorldLocationAndRotation(CellCenter + Lift, FRotator(0.f, HueDir::ToYaw(PreviewFacing), 0.f));
-	// Cone points along its local +Z.
-	PreviewArrow->SetWorldLocationAndRotation(CellCenter + Facing * HueCharacterTuning::PreviewArrowOffset + Lift,
-		FRotationMatrix::MakeFromZ(Facing).Rotator());
-
-	const int8 NewColorState = Target.bCanPlace ? 1 : 0;
-	if (PreviewMID && NewColorState != PreviewColorState)
+	else
 	{
-		PreviewMID->SetVectorParameterValue(TEXT("Color"),
-			Target.bCanPlace ? HueCharacterTuning::PreviewValid : HueCharacterTuning::PreviewInvalid);
-		PreviewColorState = NewColorState;
+		BuildTool->ClearTarget();
 	}
-}
-
-void AHueboxCharacter::ClearHighlight()
-{
-	if (APulseBlock* Block = HighlightedBlock.Get())
-	{
-		Block->SetHighlighted(false);
-	}
-	HighlightedBlock.Reset();
 }
 
 bool AHueboxCharacter::IsStandingOnCell(const AHueBoard* Board, FIntPoint Cell) const
@@ -710,264 +536,30 @@ bool AHueboxCharacter::IsStandingOnCell(const AHueBoard* Board, FIntPoint Cell) 
 	return bOverlapXY && bOverlapZ;
 }
 
-// ---- Editing actions ----------------------------------------------------------------------------------------
-
-void AHueboxCharacter::RotateTargetOrPreview(int32 Steps)
+const FHueInteractionTarget& AHueboxCharacter::GetTarget() const
 {
-	if (Target.Kind == EHueTargetKind::Block)
-	{
-		if (APulseBlock* Block = Target.Block.Get())
-		{
-			if (!Block->IsRemovable() || !Block->CanRotate())
-			{
-				ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("%s is fixed and cannot be rotated"), *Block->GetDisplayName()));
-				return;
-			}
-			if (!IsEditingAllowed())
-			{
-				ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::ResetBeforeEditing);
-				return;
-			}
-			Block->RotateBy(Steps);
-			return;
-		}
-	}
-
-	// Nothing rotatable under the crosshair: rotate the placement preview instead.
-	PreviewFacing = HueDir::Rotate(PreviewFacing, Steps);
+	// Plain value data (weak refs only), so a function-local static is safe at shutdown.
+	static const FHueInteractionTarget NoTarget{};
+	return BuildTool ? BuildTool->GetTarget() : NoTarget;
 }
 
-void AHueboxCharacter::AdjustTargetDelay(int32 Steps)
+EHueDir AHueboxCharacter::GetPreviewFacing() const
 {
-	AHueDelayBlock* Delay = (Target.Kind == EHueTargetKind::Block) ? Cast<AHueDelayBlock>(Target.Block.Get()) : nullptr;
-	if (!Delay)
-	{
-		ShowMessage(EHueFeedbackKind::Info, TEXT("Aim at a delay block to change its delay (Z / X)"));
-		return;
-	}
-	if (!IsEditingAllowed())
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::ResetBeforeEditing);
-		return;
-	}
-
-	const float Before = Delay->GetDelaySeconds();
-	Delay->AdjustDelay(Steps);
-	const float After = Delay->GetDelaySeconds();
-
-	if (FMath::IsNearlyEqual(Before, After))
-	{
-		ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Delay %.2f s (%s)"), After,
-			After <= AHueDelayBlock::MinDelay + UE_KINDA_SMALL_NUMBER ? TEXT("minimum") : TEXT("maximum")));
-	}
-	else
-	{
-		ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Delay %.2f s"), After));
-	}
-}
-
-bool AHueboxCharacter::TryPlaceSelected()
-{
-	AHueBoard* Board = Target.Board.Get();
-	if (Target.Kind != EHueTargetKind::Cell || !Board || !Inventory)
-	{
-		return false;
-	}
-
-	const EHueModuleType Type = Inventory->GetSelectedType();
-	if (Type == EHueModuleType::None)
-	{
-		ShowMessage(EHueFeedbackKind::Info, HueCharacterText::SelectModule);
-		return false;
-	}
-
-	// Re-validate at click time: the run state or occupancy may have changed since the last tick.
-	FString Reason;
-	if (!Board->CanPlaceAt(Target.Cell, &Reason))
-	{
-		ShowMessage(EHueFeedbackKind::Warning, Reason.IsEmpty() ? FString(HueCharacterText::CannotPlace) : Reason);
-		return false;
-	}
-	if (IsStandingOnCell(Board, Target.Cell))
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::StandingOnCell);
-		return false;
-	}
-
-	const TSubclassOf<APulseBlock> BlockClass = AHueboxGameMode::ResolveModuleClass(this, Type);
-	if (!BlockClass)
-	{
-		ShowMessage(EHueFeedbackKind::Error, FString::Printf(TEXT("No block class for %s"), HueModule::DisplayName(Type)));
-		return false;
-	}
-
-	const int32 SlotIndex = Inventory->GetSelectedIndex();
-	APulseBlock* Block = Board->SpawnBlock(BlockClass, Target.Cell, PreviewFacing, /*bRemovable*/ true);
-	if (!Block)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::CannotPlace);
-		return false;
-	}
-
-	// Transaction: the inventory pays for the block that now exists; if it cannot, undo the placement.
-	if (!Inventory->RemoveFromSlot(SlotIndex, 1))
-	{
-		Board->RemoveBlock(Block);
-		return false;
-	}
-	SelectNextFilledSlotIfEmpty();
-	return true;
-}
-
-bool AHueboxCharacter::TryCollectBlock(APulseBlock* Block)
-{
-	if (!IsValid(Block))
-	{
-		return false;
-	}
-
-	const EHueModuleType Type = Block->GetModuleType();
-	if (!Block->IsRemovable() || Type == EHueModuleType::None)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::FixedUnits);
-		return false;
-	}
-	if (!IsEditingAllowed())
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::ResetBeforeEditing);
-		return false;
-	}
-	if (!Inventory || !Inventory->CanAdd(Type, 1))
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::InventoryFull);
-		return false;
-	}
-
-	const FString Name = Block->GetDisplayName();
-
-	if (HighlightedBlock.Get() == Block)
-	{
-		HighlightedBlock.Reset();
-	}
-
-	// The board owns the block: let it unregister and destroy it. A stray block without a board is destroyed directly.
-	bool bRemoved = false;
-	if (AHueBoard* Board = Block->GetBoard())
-	{
-		bRemoved = Board->RemoveBlock(Block);
-	}
-	else
-	{
-		bRemoved = Block->Destroy();
-	}
-
-	if (!bRemoved)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, FString::Printf(TEXT("%s could not be removed"), *Name));
-		return false;
-	}
-
-	// CanAdd above guarantees this fits.
-	const int32 Added = Inventory->AddItem(Type, 1);
-	ensureMsgf(Added == 1, TEXT("Inventory refused a module after CanAdd succeeded"));
-
-	SelectIfNothingSelected(Type);
-	ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Collected %s"), *Name));
-	return true;
-}
-
-int32 AHueboxCharacter::TryCollectPickup(AHueModulePickup* Pickup)
-{
-	if (!IsValid(Pickup) || !Inventory)
-	{
-		return 0;
-	}
-
-	const EHueModuleType Type = Pickup->GetModuleType();
-	const int32 Count = Pickup->GetCount();
-
-	if (Type == EHueModuleType::None)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, TEXT("This pickup holds no module"));
-		return 0;
-	}
-	if (Count <= 0)
-	{
-		Pickup->Destroy();
-		return 0;
-	}
-
-	const int32 Added = Inventory->AddItem(Type, Count);
-	if (Added <= 0)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, HueCharacterText::InventoryFull);
-		return 0;
-	}
-
-	const int32 Left = Count - Added;
-	if (Left > 0)
-	{
-		Pickup->SetContents(Type, Left);
-	}
-	else
-	{
-		Pickup->Destroy();
-	}
-
-	SelectIfNothingSelected(Type);
-
-	if (Left > 0)
-	{
-		ShowMessage(EHueFeedbackKind::Warning, FString::Printf(TEXT("Collected %d x %s - inventory full, %d left"), Added, HueModule::DisplayName(Type), Left));
-	}
-	else
-	{
-		ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Collected %d x %s"), Added, HueModule::DisplayName(Type)));
-	}
-	return Added;
+	return BuildTool ? BuildTool->GetPreviewFacing() : EHueDir::East;
 }
 
 // ---- Helpers ------------------------------------------------------------------------------------------------
 
 void AHueboxCharacter::ShowMessage(EHueFeedbackKind Kind, const FString& Message)
 {
-	if (Message.IsEmpty())
+	if (BuildTool)
 	{
-		return;
+		// The tool forwards to the exhibit feedback log (or the output log without a manager).
+		BuildTool->ShowMessage(Kind, Message);
 	}
-
-	if (AExhibitManager* Manager = AExhibitManager::Get(this))
-	{
-		// The manager logs and keeps the line for the HUD feedback list.
-		Manager->PushFeedback(Kind, Message);
-	}
-	else
+	else if (!Message.IsEmpty())
 	{
 		UE_LOG(LogHuebox, Log, TEXT("[Player] %s"), *Message);
-	}
-}
-
-bool AHueboxCharacter::IsEditingAllowed() const
-{
-	const AExhibitManager* Manager = AExhibitManager::Get(this);
-	return Manager == nullptr || Manager->IsEditingAllowed();
-}
-
-void AHueboxCharacter::SelectIfNothingSelected(EHueModuleType Type)
-{
-	if (!Inventory || Inventory->GetSelectedType() != EHueModuleType::None)
-	{
-		return;
-	}
-
-	const TArray<FHueInventorySlot>& Slots = Inventory->GetSlots();
-	for (int32 Index = 0; Index < Slots.Num(); ++Index)
-	{
-		if (!Slots[Index].IsEmpty() && Slots[Index].Type == Type)
-		{
-			Inventory->SelectSlot(Index);
-			return;
-		}
 	}
 }
 

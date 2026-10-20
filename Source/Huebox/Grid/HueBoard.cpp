@@ -4,6 +4,7 @@
 #include "Blocks/HueFixedBlocks.h"
 #include "Rig/ReactiveRig.h"
 #include "Game/ExhibitManager.h"
+#include "Player/HueInventoryComponent.h"
 
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -80,6 +81,9 @@ AHueBoard::AHueBoard()
 	Title->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Title->SetGenerateOverlapEvents(false);
 	Title->SetText(FText::FromString(BoardName));
+
+	// Instruction-mode module supply. Layout data, not attempt state: ResetAllBlocks / ResetObjectives never touch it.
+	Tray = CreateDefaultSubobject<UHueInventoryComponent>(TEXT("Tray"));
 }
 
 // ---- Lifecycle ----------------------------------------------------------------------------------------------

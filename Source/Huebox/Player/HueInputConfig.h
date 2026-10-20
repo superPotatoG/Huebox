@@ -33,6 +33,7 @@ public:
 	/** Creates all actions and the mapping context (idempotent). */
 	void BuildDefaults();
 
+	/** Sandbox / first-person context (AHueboxCharacter). */
 	UPROPERTY(Transient) TObjectPtr<UInputMappingContext> MappingContext;
 
 	UPROPERTY(Transient) TObjectPtr<UInputAction> Move;          // Axis2D
@@ -49,6 +50,22 @@ public:
 	UPROPERTY(Transient) TObjectPtr<UInputAction> ResetRun;      // Bool (R)
 	UPROPERTY(Transient) TObjectPtr<UInputAction> ToggleHelp;    // Bool (H)
 	UPROPERTY(Transient) TObjectPtr<UInputAction> PauseMenu;     // Bool (Esc / P), triggers while paused
+
+	// ---- Instruction mode (AHueBuilderPawn) ----------------------------------------------------------------
+	UPROPERTY(Transient) TObjectPtr<UInputAction> CursorMove;    // Axis2D: W/S/A/D + arrow keys (X = right, Y = up on screen)
+	UPROPERTY(Transient) TObjectPtr<UInputAction> Secondary;     // Bool (RMB): collect the block under the cursor
+	UPROPERTY(Transient) TObjectPtr<UInputAction> NextBoard;     // Bool (Tab, ])
+	UPROPERTY(Transient) TObjectPtr<UInputAction> PrevBoard;     // Bool ([)
+
+	/**
+	 * Build view: CursorMove (WASD + arrows), Interact (LMB), Secondary (RMB), RotateLeft/Right (Q/E),
+	 * DelayDown/Up (Z/X), HotbarScroll (wheel), HotbarSlot (1-6), RunToggle (Space), ResetRun (R),
+	 * NextBoard (Tab, ]), PrevBoard ([), ToggleHelp (H), PauseMenu (Esc, P).
+	 */
+	UPROPERTY(Transient) TObjectPtr<UInputMappingContext> BuildContext;
+
+	/** Watch view: RunToggle (Space), ResetRun (R), NextBoard (Tab, ]), ToggleHelp (H), PauseMenu (Esc, P). */
+	UPROPERTY(Transient) TObjectPtr<UInputMappingContext> WatchContext;
 
 	bool IsBuilt() const { return MappingContext != nullptr; }
 };

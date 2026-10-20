@@ -6,7 +6,7 @@
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
-#include "Player/HueboxCharacter.h"
+#include "Player/HueBuildToolComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace HuePickupTuning
@@ -120,7 +120,8 @@ void AHueModulePickup::RefreshVisuals()
 {
 	if (MID)
 	{
-		MID->SetVectorParameterValue(TEXT("Color"), HueModule::BodyColor(Type));
+		// Accent, not the white body: the floor supply is told apart by colour (placed modules by their labels).
+		MID->SetVectorParameterValue(TEXT("Color"), HueModule::AccentColor(Type));
 	}
 
 	if (Label)
@@ -129,13 +130,17 @@ void AHueModulePickup::RefreshVisuals()
 	}
 }
 
-FString AHueModulePickup::GetInteractPrompt_Implementation(AHueboxCharacter* Interactor) const
+FString AHueModulePickup::GetInteractPrompt_Implementation(AActor* Interactor) const
 {
 	return FString::Printf(TEXT("LMB  Pick up %d x %s"), Count, HueModule::DisplayName(Type));
 }
 
-bool AHueModulePickup::Interact_Implementation(AHueboxCharacter* Interactor)
+bool AHueModulePickup::Interact_Implementation(AActor* Interactor)
 {
-	// The character owns the inventory rules (stacking, "inventory full", destroying an emptied pickup).
-	return IsValid(Interactor) && Interactor->TryCollectPickup(this) > 0;
+	// The interactor's build tool owns the inventory rules (stacking, "inventory full", destroying an emptied pickup).
+	if (UHueBuildToolComponent* Tool = IsValid(Interactor) ? Interactor->FindComponentByClass<UHueBuildToolComponent>() : nullptr)
+	{
+		return Tool->TryCollectPickup(this) > 0;
+	}
+	return false;
 }

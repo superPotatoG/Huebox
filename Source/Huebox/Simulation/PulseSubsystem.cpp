@@ -24,6 +24,13 @@ namespace HuePulsePrivate
 		default:                        return TEXT("Info");
 		}
 	}
+
+	/** 0 at departure, 1 at arrival (clamped). Shared by the 3D visuals and the minimap snapshots. */
+	static double TravelAlpha(int64 DepartTimeMs, int64 ArrivalTimeMs, double NowMs)
+	{
+		const double SpanMs = static_cast<double>(ArrivalTimeMs - DepartTimeMs);
+		return SpanMs > 0.0 ? FMath::Clamp((NowMs - static_cast<double>(DepartTimeMs)) / SpanMs, 0.0, 1.0) : 1.0;
+	}
 }
 
 // ---- Subsystem lifetime ----------------------------------------------------------------------------------------
@@ -536,6 +543,28 @@ bool UPulseSubsystem::HasFeedbackContaining(const FString& Substring) const
 	return false;
 }
 
+void UPulseSubsystem::GetPulseSnapshots(TArray<FHuePulseSnapshot>& OutSnapshots) const
+{
+	OutSnapshots.Reset();
+	if (!bRunning || !ActiveBoard.IsValid())
+	{
+		return;
+	}
+
+	// Same timeline as UpdateVisuals (also while paused: the minimap shows the frozen positions). Pure value copies.
+	const double NowMs = SimTimeExactMs;
+	OutSnapshots.Reserve(Pulses.Num());
+	for (const TPair<int32, FTravelingPulse>& Pair : Pulses)
+	{
+		const FTravelingPulse& Pulse = Pair.Value;
+		const double Alpha = HuePulsePrivate::TravelAlpha(Pulse.DepartTimeMs, Pulse.Data.ArrivalTimeMs, NowMs);
+
+		FHuePulseSnapshot& Snapshot = OutSnapshots.AddDefaulted_GetRef();
+		Snapshot.CellPosition = FMath::Lerp(FVector2D(Pulse.FromCell), FVector2D(Pulse.Data.Cell), Alpha);
+		Snapshot.Color = Pulse.Data.Color;
+	}
+}
+
 FVector UPulseSubsystem::CellToWorld(FIntPoint Cell) const
 {
 	const AHueBoard* Board = ActiveBoard.Get();
@@ -635,8 +664,7 @@ void UPulseSubsystem::UpdateVisuals()
 			continue;
 		}
 
-		const double SpanMs = static_cast<double>(Pulse->Data.ArrivalTimeMs - Pulse->DepartTimeMs);
-		const double Alpha = SpanMs > 0.0 ? FMath::Clamp((NowMs - static_cast<double>(Pulse->DepartTimeMs)) / SpanMs, 0.0, 1.0) : 1.0;
+		const double Alpha = HuePulsePrivate::TravelAlpha(Pulse->DepartTimeMs, Pulse->Data.ArrivalTimeMs, NowMs);
 		const FVector From = CellToWorld(Pulse->FromCell);
 		const FVector To = CellToWorld(Pulse->Data.Cell);
 		Visual->SetActorLocation(FMath::Lerp(From, To, Alpha));

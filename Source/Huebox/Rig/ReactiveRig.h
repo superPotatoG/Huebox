@@ -9,7 +9,10 @@ class UStaticMeshComponent;
 class USkeletalMeshComponent;
 class UTextRenderComponent;
 class UMaterialInstanceDynamic;
+class UMaterialInterface;
 class UPhysicalMaterial;
+class UAnimSequence;
+class UHuePerformerSkin;
 
 /** Result of the analytic motion preview (used by tests / graybox validation). */
 struct FHueMotionPrediction
@@ -66,6 +69,14 @@ public:
 	/** Shows marker posts for the objectives (far marker, return marker, target zone). */
 	void ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives);
 
+	// ---- Skin (presentation only; physics is identical for every skin) ----------------------------------------
+
+	/** Replaces the look of the rig at runtime (null = project default skin). */
+	void SetSkin(TSubclassOf<UHuePerformerSkin> NewSkin);
+	TSubclassOf<UHuePerformerSkin> GetSkinClass() const { return SkinClass; }
+	/** "Dancer", "Carriage", ... (from the skin) for HUD / feedback text. */
+	FString GetPerformerName() const;
+
 	/** Extreme positions of the current attempt (kept visible after a failed run). */
 	float GetAttemptMaxFraction() const { return AttemptMaxFraction; }
 
@@ -110,6 +121,10 @@ public:
 	/** Half length of the carriage along the track (cm). */
 	UPROPERTY(EditAnywhere, Category = "Hue|Rig")
 	float CarriageHalfLength = 40.f;
+
+	/** Look of this rig. Empty = Project Settings > Huebox > Default Skin. */
+	UPROPERTY(EditAnywhere, Category = "Hue|Skin")
+	TSubclassOf<UHuePerformerSkin> SkinClass;
 
 protected:
 	virtual void BeginPlay() override;
@@ -168,6 +183,30 @@ protected:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UTextRenderComponent>> MarkerLabels;
 
+	// ---- Skin state ----------------------------------------------------------------------------------------
+
+	/** Class default object of the applied skin (CDOs live for the whole session; never instanced). */
+	UPROPERTY(Transient)
+	TObjectPtr<const UHuePerformerSkin> ActiveSkin;
+
+	/** Components the skin created (partner, backdrop); destroyed when the skin changes. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<USceneComponent>> SkinComponents;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> BackdropMID;
+
+	/** Loaded animations of the active skin; the UPROPERTY keeps the soft-loaded assets in memory. */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequence> MoveAnim;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequence> IdleAnim;
+
+	/** +1 = performer faces away from the anchor, -1 = towards it. */
+	float FacingSign = -1.f;
+	bool bPlayingMoveAnim = false;
+
 	EHueColor CurrentColor = EHueColor::N;
 	bool bMotionActive = false;
 	bool bMotionPaused = false;
@@ -180,6 +219,16 @@ private:
 	/** Restores the carriage under the rig root (simulation detaches it) and teleports it to the start. */
 	void PlaceCarriageAtStart();
 	void ClearObjectiveMarkers();
-	UStaticMeshComponent* AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color);
+	UStaticMeshComponent* AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color,
+		UStaticMesh* Mesh = nullptr, bool bFlat = false, const FRotator& RelativeRotation = FRotator::ZeroRotator);
+
+	void ApplySkin();
+	void ClearSkinComponents();
+	/** Loop animation, play rate and facing of the performer from the current speed. */
+	void UpdatePerformer();
+	/** Unlit flat-colour material instance (M_HueUnlit, falls back to the basic shape material). */
+	UMaterialInstanceDynamic* MakeFlatMID(UObject* Outer, const FLinearColor& Color) const;
+	/** Objectives last shown, so a skin change can rebuild the markers in the new style. */
+	TArray<FHueObjective> ShownObjectives;
 	void AddMarkerLabel(const FString& Text, const FVector& RelativeLocation, const FLinearColor& Color);
 };

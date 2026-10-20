@@ -23,7 +23,7 @@ namespace HueBoardPrivate
 	constexpr float FloorThickness = 2.f;          // cm, floor top = actor Z + 2
 	constexpr float LineWidth = 1.5f;              // cm
 	constexpr float LineHeight = 0.6f;             // cm, sits on top of the floor
-	constexpr float TitleHeight = 230.f;
+	constexpr float TitleHeight = 330.f; // above the stage's paper screen (280 cm) behind the grid
 	constexpr float TitleWorldSize = 40.f;
 	constexpr int32 MaxGridDimension = 64;
 	/** Level-placed blocks further than this above/below the floor are not adopted by the board. */

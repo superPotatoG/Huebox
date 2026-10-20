@@ -105,8 +105,9 @@ namespace HueTutorialPrivate
 		Layout.Brief = Brief;
 		Layout.Origin = FVector(Index * BoardSpacing, 0.f, 0.f);
 		Layout.GridSize = FIntPoint(6, 6);
-		// Rig on the viewer (north) side, 3 m beyond the grid's north edge (y = 600).
-		Layout.RigOffset = FVector(-200.f, 900.f, 0.f);
+		// Stage just behind the far (south) edge of the grid: the viewer north of the board sees the grid in front and
+		// the performance behind it in one view (the paper screen sits a further 60 cm back).
+		Layout.RigOffset = FVector(-200.f, -170.f, 0.f);
 		Layout.TrackLength = 1000.f;
 		return Layout;
 	}
@@ -241,7 +242,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(0,
 			TEXT("1 \u00B7 Route a Signal"),
 			TEXT("The source fires one B pulse to the right, but a barrier blocks the way. Collect the modules on the floor, ")
-			TEXT("route the pulse up and around, and turn it into A so the carriage is pushed away.")));
+			TEXT("route the pulse up and around, and turn it into A so the dancer is pushed away from her partner.")));
 
 		Layout.Blocks = {
 			MakeSource(0, 4, EHueDir::East, EHueColor::B),
@@ -258,7 +259,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 
 		FHueObjective TurnsA = MakeObjective(EHueObjectiveType::ReceiverColor, TEXT("Receiver turns A"));
 		TurnsA.Color = EHueColor::A;
-		FHueObjective PastHalfway = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Carriage pushed past the halfway marker"));
+		FHueObjective PastHalfway = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Pushed past the halfway marker"));
 		PastHalfway.TrackFraction = 0.5f;
 		Layout.Objectives = { TurnsA, PastHalfway };
 
@@ -305,7 +306,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(2,
 			TEXT("3 \u00B7 Synthesize a Stop"),
-			TEXT("Route 1 starts the carriage. The mixer turns A + B into N, which brakes it - but only if both arrive ")
+			TEXT("Route 1 starts the dancer. The mixer turns A + B into N, which brakes her - but only if both arrive ")
 			TEXT("within 0.5 s. The B route is longer: place the delay on the A route and tune it.")));
 
 		Layout.Blocks = {
@@ -329,9 +330,9 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakePickup(EHueModuleType::Delay, 1, 100.f, 720.f),
 		};
 
-		FHueObjective Leave = MakeObjective(EHueObjectiveType::LeaveStart, TEXT("Carriage leaves the start"));
+		FHueObjective Leave = MakeObjective(EHueObjectiveType::LeaveStart, TEXT("Leaves the start"));
 		Leave.TrackFraction = 0.12f;
-		FHueObjective Stop = MakeObjective(EHueObjectiveType::StopInZone, TEXT("Brake inside the practice zone and hold still for 1 s"));
+		FHueObjective Stop = MakeObjective(EHueObjectiveType::StopInZone, TEXT("Stop in the spotlight and hold still for 1 s"));
 		Stop.ZoneMin = 0.30f;
 		Stop.ZoneMax = 0.56f;
 		Stop.MaxSpeedFraction = 0.02f;
@@ -687,7 +688,7 @@ void AHueTutorialBuilder::SpawnEnvironmentIfMissing()
 			const float HalfCell = 0.5f * HueTutorialPrivate::ProbeCellSize;
 			Probes.Add(Base + Layout.Origin + FVector(Layout.GridSize.X * HalfCell, Layout.GridSize.Y * HalfCell, 0.f));
 		}
-		Probes.Add(Base + FVector(300.f, 1750.f, 0.f));
+		Probes.Add(Base + FVector(300.f, 1200.f, 0.f));
 
 		int32 Covered = 0;
 		for (const FVector& Probe : Probes)

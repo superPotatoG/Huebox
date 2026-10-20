@@ -1,8 +1,13 @@
 #include "Rig/ReactiveRig.h"
 
 #include "Blocks/PulseBlock.h"
+#include "Core/HueboxSettings.h"
+#include "Rig/HuePerformerSkin.h"
 
+#include "Animation/AnimSequence.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/CollisionProfile.h"
@@ -31,8 +36,24 @@ namespace HueRigPrivate
 	constexpr float StopHeight = 40.f;
 	constexpr float AnchorSize = 60.f;
 	constexpr float AnchorCenterX = -60.f;
-	constexpr float StateLabelZ = 125.f;
+	constexpr float StateLabelZ = 175.f;
 	constexpr float FigureScale = 0.45f;
+
+	// Skin parts (rig-local, viewer on +Y, so "behind" the performer is -Y).
+	constexpr float BackdropY = -60.f;
+	constexpr float BackdropThickness = 2.f;
+	constexpr float BackdropNearOverhang = 200.f;    // screen extends this far behind the anchor end
+	constexpr float BackdropFarOverhang = 120.f;
+	constexpr float SpotlightY = BackdropY + BackdropThickness * 0.5f + 1.f;
+	constexpr float PerformerLetterZ = 60.f;         // world height of the colour letter in front of a standing figure
+	constexpr float MovingSpeedThreshold = 15.f;     // cm/s: below this the performer idles
+	const TCHAR* const FlatMaterialPath = TEXT("/Game/Huebox/Materials/M_HueUnlit.M_HueUnlit");
+
+	/** Scale of the carriage box; children use absolute scale but their relative location is in box space. */
+	FVector CarriageScale(float HalfLength)
+	{
+		return FVector(2.f * FMath::Max(HalfLength, 1.f) / 100.f, CarriageWidth / 100.f, CarriageHeight / 100.f);
+	}
 
 	// Objective markers.
 	constexpr float MarkerSideOffset = 45.f;         // towards the viewer
@@ -245,6 +266,7 @@ void AReactiveRig::BeginPlay()
 	TintComponent(FarStop, StopColor);
 	TintComponent(AnchorMesh, HueColor::ToLinear(EHueColor::A));
 
+	ApplySkin();
 	ResetRig();
 }
 
@@ -305,6 +327,8 @@ void AReactiveRig::LayoutComponents()
 void AReactiveRig::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	UpdatePerformer();
 
 	if (!bMotionActive || bMotionPaused || !IsValid(Carriage) || !Carriage->IsSimulatingPhysics())
 	{
@@ -597,12 +621,347 @@ void AReactiveRig::UpdateColorVisuals()
 	}
 	if (StateLabel)
 	{
-		StateLabel->SetText(FText::FromString(FString::Printf(TEXT("Carriage: %s (%s)"), Letter, HueRigPrivate::ResponseName(CurrentColor))));
+		StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: %s (%s)"), *GetPerformerName(), Letter, HueRigPrivate::ResponseName(CurrentColor))));
 		StateLabel->SetTextRenderColor(Color.ToFColor(true));
 	}
 	if (CarriageLabel)
 	{
 		CarriageLabel->SetText(FText::FromString(Letter));
+		if (ActiveSkin && ActiveSkin->bLettersInSignalColor)
+		{
+			CarriageLabel->SetTextRenderColor(Color.ToFColor(true));
+		}
+	}
+	if (BackdropMID && ActiveSkin)
+	{
+		// The paper screen glows slightly in the performer's current signal colour.
+		const FLinearColor Tint = FMath::Lerp(ActiveSkin->BackdropColor, Color * ActiveSkin->BackdropColor.GetMax(), ActiveSkin->BackdropSignalTint);
+		BackdropMID->SetVectorParameterValue(TEXT("Color"), Tint);
+	}
+}
+
+// ---- Skin ---------------------------------------------------------------------------------------------------
+
+namespace HueRigPrivate
+{
+	/** Hue.Skin [index|name]: list the skins, or apply one to every rig of the world (dev / sandbox preview). */
+	static void HandleSkinCommand(const TArray<FString>& Args, UWorld* World)
+	{
+		TArray<TSubclassOf<UHuePerformerSkin>> Skins;
+		UHueboxSettings::GetAvailableSkins(Skins);
+
+		if (Args.Num() == 0)
+		{
+			for (int32 Index = 0; Index < Skins.Num(); ++Index)
+			{
+				UE_LOG(LogHuebox, Display, TEXT("Hue.Skin %d : %s (%s)"), Index,
+					*GetDefault<UHuePerformerSkin>(Skins[Index])->DisplayName.ToString(), *Skins[Index]->GetName());
+			}
+			return;
+		}
+
+		TSubclassOf<UHuePerformerSkin> Chosen;
+		if (Args[0].IsNumeric())
+		{
+			const int32 Index = FCString::Atoi(*Args[0]);
+			Chosen = Skins.IsValidIndex(Index) ? Skins[Index] : nullptr;
+		}
+		else
+		{
+			for (const TSubclassOf<UHuePerformerSkin>& Skin : Skins)
+			{
+				if (Skin->GetName().Contains(Args[0]) || GetDefault<UHuePerformerSkin>(Skin)->DisplayName.ToString().Contains(Args[0]))
+				{
+					Chosen = Skin;
+					break;
+				}
+			}
+		}
+
+		if (!Chosen || !World)
+		{
+			UE_LOG(LogHuebox, Warning, TEXT("Hue.Skin: no skin matches '%s' (run Hue.Skin without arguments to list them)"), *Args[0]);
+			return;
+		}
+		for (TActorIterator<AReactiveRig> It(World); It; ++It)
+		{
+			It->SetSkin(Chosen);
+		}
+		UE_LOG(LogHuebox, Display, TEXT("Hue.Skin: applied %s"), *Chosen->GetName());
+	}
+
+	static FAutoConsoleCommandWithWorldAndArgs GHueSkinCommand(
+		TEXT("Hue.Skin"),
+		TEXT("Hue.Skin [index|name] - list the performer skins, or apply one to every rig"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&HandleSkinCommand));
+}
+
+void AReactiveRig::SetSkin(TSubclassOf<UHuePerformerSkin> NewSkin)
+{
+	SkinClass = NewSkin;
+	if (HasActorBegunPlay())
+	{
+		ApplySkin();
+	}
+}
+
+FString AReactiveRig::GetPerformerName() const
+{
+	return ActiveSkin ? ActiveSkin->PerformerName : FString(TEXT("Carriage"));
+}
+
+UMaterialInstanceDynamic* AReactiveRig::MakeFlatMID(UObject* Outer, const FLinearColor& Color) const
+{
+	UMaterialInterface* Base = nullptr;
+	if (ActiveSkin && !ActiveSkin->FlatMaterial.IsNull())
+	{
+		Base = ActiveSkin->FlatMaterial.LoadSynchronous();
+	}
+	if (!Base)
+	{
+		static TWeakObjectPtr<UMaterialInterface> CachedFlat;
+		if (!CachedFlat.IsValid())
+		{
+			CachedFlat = LoadObject<UMaterialInterface>(nullptr, HueRigPrivate::FlatMaterialPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+		}
+		Base = CachedFlat.Get();
+	}
+	if (!Base)
+	{
+		Base = APulseBlock::GetBasicMaterial(); // lit fallback if the project material is missing
+	}
+	if (!Base)
+	{
+		return nullptr;
+	}
+	UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, Outer);
+	MID->SetVectorParameterValue(TEXT("Color"), Color);
+	return MID;
+}
+
+void AReactiveRig::ClearSkinComponents()
+{
+	for (USceneComponent* Component : SkinComponents)
+	{
+		if (IsValid(Component))
+		{
+			Component->DestroyComponent();
+		}
+	}
+	SkinComponents.Reset();
+	BackdropMID = nullptr;
+	MoveAnim = nullptr;
+	IdleAnim = nullptr;
+	bPlayingMoveAnim = false;
+}
+
+void AReactiveRig::ApplySkin()
+{
+	using namespace HueRigPrivate;
+
+	ClearSkinComponents();
+
+	TSubclassOf<UHuePerformerSkin> Class = SkinClass ? SkinClass : UHueboxSettings::GetDefaultSkinClass();
+	if (!Class || Class->HasAnyClassFlags(CLASS_Abstract))
+	{
+		Class = UHueSkin_Carriage::StaticClass();
+	}
+	const UHuePerformerSkin* Skin = GetDefault<UHuePerformerSkin>(Class);
+	ActiveSkin = Skin;
+
+	const bool bRidesOnBody = Skin->bShowCarriageBody;
+	const FVector BoxScale = CarriageScale(CarriageHalfLength);
+
+	// Runtime component helper: outer = this actor, registered, owned through the SkinComponents UPROPERTY.
+	auto AddMesh = [this](USceneComponent* Parent, UStaticMesh* Mesh, const FVector& Location, const FRotator& Rotation,
+		const FVector& Scale, const FLinearColor& Color) -> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* Part = NewObject<UStaticMeshComponent>(this);
+		Part->SetStaticMesh(Mesh);
+		Part->SetMobility(EComponentMobility::Movable);
+		Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part->SetGenerateOverlapEvents(false);
+		Part->SetCanEverAffectNavigation(false);
+		Part->SetCastShadow(false);
+		Part->SetupAttachment(Parent);
+		Part->SetUsingAbsoluteScale(Parent != SceneRoot);
+		Part->SetRelativeLocationAndRotation(Location, Rotation);
+		Part->SetRelativeScale3D(Scale);
+		Part->RegisterComponent();
+		Part->SetMaterial(0, MakeFlatMID(Part, Color));
+		SkinComponents.Add(Part);
+		return Part;
+	};
+
+	// Two-piece paper figure (dress cone + head) for when the skeletal mesh is not available.
+	auto AddPrimitiveFigure = [&](USceneComponent* Parent, const FVector& FeetOffset, float Height)
+	{
+		const FVector Divisor = Parent == Carriage ? BoxScale : FVector::OneVector;
+		AddMesh(Parent, APulseBlock::GetConeMesh(), (FeetOffset + FVector(0.f, 0.f, Height * 0.4f)) / Divisor, FRotator::ZeroRotator,
+			FVector(Height * 0.0035f, Height * 0.0012f, Height * 0.008f), Skin->PerformerColor);
+		AddMesh(Parent, APulseBlock::GetSphereMesh(), (FeetOffset + FVector(0.f, 0.f, Height * 0.9f)) / Divisor, FRotator::ZeroRotator,
+			FVector(Height * 0.0018f), Skin->PerformerColor);
+	};
+
+	auto FlattenMaterials = [this, Skin](UMeshComponent* Mesh)
+	{
+		Mesh->EmptyOverrideMaterials();
+		if (Skin->bFlatPerformerColor)
+		{
+			for (int32 Slot = 0; Slot < Mesh->GetNumMaterials(); ++Slot)
+			{
+				Mesh->SetMaterial(Slot, MakeFlatMID(Mesh, Skin->PerformerColor));
+			}
+		}
+	};
+
+	// ---- Built-in parts ------------------------------------------------------------------------------------
+	if (IsValid(Carriage))
+	{
+		Carriage->SetVisibility(Skin->bShowCarriageBody, /*bPropagateToChildren*/ false);
+	}
+	if (IsValid(AnchorMesh))
+	{
+		AnchorMesh->SetVisibility(Skin->bShowAnchorBlock);
+	}
+	TintComponent(TrackMesh, Skin->StructureColor);
+	TintComponent(NearStop, Skin->StructureColor);
+	TintComponent(FarStop, Skin->StructureColor);
+
+	const float FeetToCarriageCenter = CarriageCenterZ - TrackHeight; // carriage centre above the track top
+	if (CarriageLabel)
+	{
+		const float LetterZ = bRidesOnBody ? 0.f : (PerformerLetterZ - CarriageCenterZ) / BoxScale.Z;
+		CarriageLabel->SetRelativeLocation(FVector(0.f, 50.f + 1.f / BoxScale.Y, LetterZ));
+		CarriageLabel->SetTextRenderColor(LetterOnBodyColor);
+	}
+	if (AnchorLabel)
+	{
+		AnchorLabel->SetRelativeLocation(Skin->bShowAnchorBlock
+			? FVector(AnchorCenterX, AnchorSize * 0.5f + 1.f, AnchorSize * 0.5f)
+			: FVector(AnchorCenterX, 30.f, PerformerLetterZ));
+		AnchorLabel->SetTextRenderColor(Skin->bLettersInSignalColor ? HueColor::ToLinear(EHueColor::A).ToFColor(true) : LetterOnBodyColor);
+	}
+
+	// ---- Performer (the existing Figure component, riding the physics body) ---------------------------------
+	USkeletalMesh* PerformerMesh = Skin->PerformerMesh.IsNull() ? nullptr : Skin->PerformerMesh.LoadSynchronous();
+	if (IsValid(Figure))
+	{
+		Figure->Stop();
+		Figure->SetAnimation(nullptr);
+		Figure->SetSkeletalMeshAsset(PerformerMesh);
+		Figure->SetVisibility(PerformerMesh != nullptr);
+		Figure->SetRelativeScale3D(FVector(Skin->PerformerScale));
+		Figure->SetRelativeLocation(bRidesOnBody ? FVector(0.f, 0.f, 50.f) : FVector(0.f, 0.f, -FeetToCarriageCenter / BoxScale.Z));
+		FacingSign = -1.f; // start facing the partner at the anchor
+		Figure->SetRelativeRotation(Skin->bFaceMotionDirection ? FRotator(0.f, 90.f, 0.f) : FRotator::ZeroRotator);
+		if (PerformerMesh)
+		{
+			FlattenMaterials(Figure);
+			MoveAnim = Skin->PerformerMoveAnim.IsNull() ? nullptr : Skin->PerformerMoveAnim.LoadSynchronous();
+			IdleAnim = Skin->PerformerIdleAnim.IsNull() ? nullptr : Skin->PerformerIdleAnim.LoadSynchronous();
+			Figure->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+			if (IdleAnim)
+			{
+				Figure->PlayAnimation(IdleAnim, /*bLooping*/ true);
+			}
+		}
+	}
+	if (!PerformerMesh && !Skin->bShowCarriageBody && IsValid(Carriage))
+	{
+		AddPrimitiveFigure(Carriage, FVector(0.f, 0.f, -FeetToCarriageCenter), 180.f * Skin->PerformerScale);
+	}
+
+	// ---- Partner at the fixed anchor ---------------------------------------------------------------------
+	if (Skin->bShowPartner)
+	{
+		USkeletalMesh* PartnerMesh = Skin->PartnerMesh.IsNull() ? nullptr : Skin->PartnerMesh.LoadSynchronous();
+		if (PartnerMesh)
+		{
+			USkeletalMeshComponent* Partner = NewObject<USkeletalMeshComponent>(this);
+			Partner->SetSkeletalMeshAsset(PartnerMesh);
+			Partner->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+			Partner->SetGenerateOverlapEvents(false);
+			Partner->SetCanEverAffectNavigation(false);
+			Partner->SetupAttachment(SceneRoot);
+			Partner->SetRelativeLocationAndRotation(FVector(AnchorCenterX, 0.f, TrackHeight), FRotator(0.f, -90.f, 0.f)); // faces the dancer (+X)
+			Partner->SetRelativeScale3D(FVector(Skin->PerformerScale));
+			Partner->RegisterComponent();
+			FlattenMaterials(Partner);
+			if (UAnimSequence* PartnerAnim = Skin->PartnerAnim.IsNull() ? nullptr : Skin->PartnerAnim.LoadSynchronous())
+			{
+				Partner->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+				Partner->PlayAnimation(PartnerAnim, true);
+			}
+			SkinComponents.Add(Partner);
+		}
+		else
+		{
+			AddPrimitiveFigure(SceneRoot, FVector(AnchorCenterX, 0.f, TrackHeight), 180.f * Skin->PerformerScale);
+		}
+	}
+
+	// ---- Backlit paper screen ------------------------------------------------------------------------------
+	if (Skin->bShowBackdrop)
+	{
+		const float Length = TrackLength + BackdropNearOverhang + BackdropFarOverhang;
+		const float CenterX = -BackdropNearOverhang + Length * 0.5f;
+		UStaticMeshComponent* Screen = AddMesh(SceneRoot, APulseBlock::GetCubeMesh(),
+			FVector(CenterX, BackdropY, Skin->BackdropHeight * 0.5f), FRotator::ZeroRotator,
+			FVector(Length / 100.f, BackdropThickness / 100.f, Skin->BackdropHeight / 100.f), Skin->BackdropColor);
+		BackdropMID = Cast<UMaterialInstanceDynamic>(Screen->GetMaterial(0));
+	}
+
+	// Markers follow the skin's style (spotlight vs floor plate).
+	if (ShownObjectives.Num() > 0)
+	{
+		ShowObjectiveMarkers(TArray<FHueObjective>(ShownObjectives));
+	}
+	UpdateColorVisuals();
+}
+
+void AReactiveRig::UpdatePerformer()
+{
+	if (!ActiveSkin || !IsValid(Figure) || !Figure->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+
+	const float Speed = GetCarriageSpeed();
+	const bool bMoving = FMath::Abs(Speed) > HueRigPrivate::MovingSpeedThreshold;
+
+	if (ActiveSkin->bFaceMotionDirection && bMoving)
+	{
+		const float NewSign = Speed > 0.f ? 1.f : -1.f;
+		if (NewSign != FacingSign)
+		{
+			FacingSign = NewSign;
+			// Mesh forward is +Y: yaw -90 faces +X (away from the anchor), +90 faces the anchor.
+			Figure->SetRelativeRotation(FRotator(0.f, FacingSign > 0.f ? -90.f : 90.f, 0.f));
+		}
+	}
+
+	if (bMoving && MoveAnim)
+	{
+		if (!bPlayingMoveAnim)
+		{
+			Figure->PlayAnimation(MoveAnim, true);
+			bPlayingMoveAnim = true;
+		}
+		Figure->SetPlayRate(FMath::Clamp(FMath::Abs(Speed) / FMath::Max(MaxSpeed, 1.f) * 1.4f, 0.4f, 1.6f));
+	}
+	else if (!bMoving && bPlayingMoveAnim)
+	{
+		bPlayingMoveAnim = false;
+		Figure->SetPlayRate(1.f);
+		if (IdleAnim)
+		{
+			Figure->PlayAnimation(IdleAnim, true);
+		}
+		else
+		{
+			Figure->Stop();
+		}
 	}
 }
 
@@ -611,10 +970,12 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 	using namespace HueRigPrivate;
 
 	ClearObjectiveMarkers();
+	ShownObjectives = Objectives;
 	if (!GetWorld() || !APulseBlock::GetCubeMesh())
 	{
 		return;
 	}
+	const bool bSpotlight = ActiveSkin && ActiveSkin->bShowBackdrop && ActiveSkin->bZoneAsSpotlight;
 
 	for (const FHueObjective& Objective : Objectives)
 	{
@@ -642,10 +1003,22 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 			const float ZoneMax = FMath::Clamp(FMath::Max(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
 			const float Length = FMath::Max((ZoneMax - ZoneMin) * TrackLength, 1.f);
 			const float CenterX = (ZoneMin + ZoneMax) * 0.5f * TrackLength;
-			AddMarkerMesh(FVector(CenterX, 0.f, ZonePlateZ),
-				FVector(Length / 100.f, ZonePlateWidth / 100.f, ZonePlateThickness / 100.f), ZoneColor);
-			// Floats above the mannequin's head so it never covers the carriage's colour letter when stopped here.
-			AddMarkerLabel(TEXT("STOP ZONE"), FVector(CenterX, ZonePlateWidth * 0.5f + 2.f, 135.f), ZoneColor);
+			if (bSpotlight)
+			{
+				// A glowing spotlight circle on the paper screen (disc = cylinder rolled to face the viewer).
+				const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
+				AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
+					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), ActiveSkin->SpotlightColor,
+					APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
+				AddMarkerLabel(TEXT("STOP HERE"), FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), ZoneColor);
+			}
+			else
+			{
+				AddMarkerMesh(FVector(CenterX, 0.f, ZonePlateZ),
+					FVector(Length / 100.f, ZonePlateWidth / 100.f, ZonePlateThickness / 100.f), ZoneColor);
+				// Floats above the mannequin's head so it never covers the carriage's colour letter when stopped here.
+				AddMarkerLabel(TEXT("STOP ZONE"), FVector(CenterX, ZonePlateWidth * 0.5f + 2.f, 135.f), ZoneColor);
+			}
 			break;
 		}
 		case EHueObjectiveType::ReceiverColor:
@@ -676,11 +1049,13 @@ void AReactiveRig::ClearObjectiveMarkers()
 	MarkerLabels.Reset();
 }
 
-UStaticMeshComponent* AReactiveRig::AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color)
+UStaticMeshComponent* AReactiveRig::AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color,
+	UStaticMesh* Mesh, bool bFlat, const FRotator& RelativeRotation)
 {
 	// Runtime component: outer = this actor, attached + registered, owned through the MarkerComponents UPROPERTY.
 	UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(this);
-	Marker->SetStaticMesh(APulseBlock::GetCubeMesh());
+	Marker->SetStaticMesh(Mesh ? Mesh : APulseBlock::GetCubeMesh());
+	Marker->SetRelativeRotation(RelativeRotation);
 	Marker->SetMobility(EComponentMobility::Movable);
 	Marker->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 	Marker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -691,7 +1066,14 @@ UStaticMeshComponent* AReactiveRig::AddMarkerMesh(const FVector& RelativeLocatio
 	Marker->SetRelativeLocation(RelativeLocation);
 	Marker->SetRelativeScale3D(RelativeScale);
 	Marker->RegisterComponent();
-	HueRigPrivate::TintComponent(Marker, Color);
+	if (bFlat)
+	{
+		Marker->SetMaterial(0, MakeFlatMID(Marker, Color));
+	}
+	else
+	{
+		HueRigPrivate::TintComponent(Marker, Color);
+	}
 	MarkerComponents.Add(Marker);
 	return Marker;
 }

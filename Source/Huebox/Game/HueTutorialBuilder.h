@@ -102,7 +102,7 @@ struct FHueBoardLayout
 
 	/** Rig position relative to the board origin (track runs along +X from here; default: viewer side, 3 m north of the grid). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
-	FVector RigOffset = FVector(-200.f, 900.f, 0.f);
+	FVector RigOffset = FVector(-200.f, -170.f, 0.f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	float TrackLength = 1000.f;

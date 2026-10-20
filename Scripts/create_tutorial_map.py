@@ -16,10 +16,14 @@ level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 
 if unreal.EditorAssetLibrary.does_asset_exist(MAP_PATH):
-    unreal.log_warning("Huebox: %s already exists - it will be replaced" % MAP_PATH)
-    unreal.EditorAssetLibrary.delete_asset(MAP_PATH)
-
-if not level_editor.new_level(MAP_PATH, False):
+    # Re-runnable: reuse the map (it may be the loaded startup map, so it cannot be deleted) and rebuild its actors.
+    unreal.log("Huebox: %s exists - rebuilding its actors" % MAP_PATH)
+    if not level_editor.load_level(MAP_PATH):
+        raise RuntimeError("Huebox: could not load " + MAP_PATH)
+    old = [a for a in actors.get_all_level_actors() if not isinstance(a, (unreal.WorldSettings, unreal.Brush))]
+    if old:
+        actors.destroy_actors(old)
+elif not level_editor.new_level(MAP_PATH, False):
     raise RuntimeError("Huebox: could not create " + MAP_PATH)
 
 
@@ -45,7 +49,7 @@ spawn(unreal.SkyAtmosphere, unreal.Vector(0, 0, 0), label="SkyAtmosphere")
 spawn(unreal.ExponentialHeightFog, unreal.Vector(0, 0, -100), label="HeightFog")
 
 # Player starts north of exercise 1, facing south (world -Y) so +X reads left-to-right.
-spawn(unreal.PlayerStart, unreal.Vector(300, 1750, 120), unreal.Rotator(roll=0.0, pitch=0.0, yaw=-90.0), "PlayerStart")
+spawn(unreal.PlayerStart, unreal.Vector(300, 1200, 120), unreal.Rotator(roll=0.0, pitch=0.0, yaw=-90.0), "PlayerStart")
 
 builder_class = unreal.load_class(None, "/Script/Huebox.HueTutorialBuilder")
 spawn(builder_class, unreal.Vector(0, 0, 0), label="TutorialBuilder")

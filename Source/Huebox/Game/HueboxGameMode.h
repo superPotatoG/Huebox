@@ -45,7 +45,7 @@ protected:
 
 	/** Used when the level has no APlayerStart. */
 	UPROPERTY(EditDefaultsOnly, Category = "Hue|Level")
-	FTransform FallbackSpawn = FTransform(FRotator(0.f, -90.f, 0.f), FVector(300.f, 1750.f, 120.f));
+	FTransform FallbackSpawn = FTransform(FRotator(0.f, -90.f, 0.f), FVector(300.f, 1200.f, 120.f));
 
 	UPROPERTY(Transient)
 	TObjectPtr<AExhibitManager> ExhibitManager;

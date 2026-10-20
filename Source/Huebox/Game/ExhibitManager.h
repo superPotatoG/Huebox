@@ -125,4 +125,10 @@ private:
 	bool bSelfTestActive = false;
 	/** Board currently under test. Weak: the self-test never keeps a board alive. */
 	TWeakObjectPtr<AHueBoard> SelfTestBoard;
+
+	/** -HueShot visual check (see BeginPlay). */
+	void PrepareVisualCheck();
+	void TakeVisualCheckShot();
+	FString ShotPath;
+	FTimerHandle ShotTimer;
 };

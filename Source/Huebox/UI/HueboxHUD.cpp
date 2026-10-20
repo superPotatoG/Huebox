@@ -502,8 +502,8 @@ void AHueboxHUD::DrawBoardPanel(AHueboxCharacter* Character, AExhibitManager* Ma
 	{
 		const EHueColor RigColor = Rig->GetCurrentColor();
 		HueHUD::AddLine(Lines, FString(), HueHUD::TextColor);
-		HueHUD::AddLine(Lines, FString::Printf(TEXT("Carriage: %s (%s)   %.0f%% of track   %.2f m/s   max %.0f%%"),
-			HueColor::Label(RigColor), HueHUD::ColorMeaning(RigColor),
+		HueHUD::AddLine(Lines, FString::Printf(TEXT("%s: %s (%s)   %.0f%% of track   %.2f m/s   max %.0f%%"),
+			*Rig->GetPerformerName(), HueColor::Label(RigColor), HueHUD::ColorMeaning(RigColor),
 			Rig->GetCarriageFraction() * 100.f, Rig->GetCarriageSpeed() / 100.f, Rig->GetAttemptMaxFraction() * 100.f),
 			HueColor::ToLinear(RigColor));
 	}

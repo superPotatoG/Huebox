@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
+#include "UnrealClient.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/App.h"
@@ -123,6 +124,52 @@ void AExhibitManager::BeginPlay()
 		GetWorldTimerManager().SetTimer(SelfTestStartTimer, this, &AExhibitManager::BeginSelfTest,
 			HueExhibitPrivate::SelfTestStartDelaySeconds, false);
 	}
+
+	// Visual check: -HueShot=<file.png> [-HueShotBoard=N] [-HueShotRun=<s>] frames a board, optionally installs its
+	// baseline solution and runs it for <s> seconds, saves a screenshot and quits. Use with -RenderOffscreen.
+	if (FParse::Value(FCommandLine::Get(), TEXT("HueShot="), ShotPath))
+	{
+		GetWorldTimerManager().SetTimer(ShotTimer, this, &AExhibitManager::PrepareVisualCheck, 1.5f, false);
+	}
+}
+
+void AExhibitManager::PrepareVisualCheck()
+{
+	int32 BoardIndex = 0;
+	float RunSeconds = -1.f;
+	FParse::Value(FCommandLine::Get(), TEXT("HueShotBoard="), BoardIndex);
+	FParse::Value(FCommandLine::Get(), TEXT("HueShotRun="), RunSeconds);
+
+	AHueBoard* Board = Boards.IsValidIndex(BoardIndex) ? Boards[BoardIndex].Get() : nullptr;
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	if (Pawn && IsValid(Board))
+	{
+		// Same spot as the player start of board 0: north of the grid, looking south and slightly down.
+		const FVector Center = Board->GetWorldBounds().GetCenter();
+		Pawn->SetActorLocation(FVector(Center.X, Board->GetActorLocation().Y + 1200.f, Pawn->GetActorLocation().Z),
+			false, nullptr, ETeleportType::TeleportPhysics);
+		PC->SetControlRotation(FRotator(-14.f, -90.f, 0.f));
+	}
+
+	if (RunSeconds >= 0.f && IsValid(Board))
+	{
+		const AHueTutorialBuilder* Builder = AHueTutorialBuilder::FindInWorld(this);
+		if (const FHueBoardLayout* Layout = Builder ? Builder->FindLayoutForBoard(Board) : nullptr)
+		{
+			AHueTutorialBuilder::InstallSolution(Board, *Layout);
+		}
+		StartRun(Board);
+	}
+	GetWorldTimerManager().SetTimer(ShotTimer, this, &AExhibitManager::TakeVisualCheckShot, RunSeconds >= 0.f ? RunSeconds : 2.5f, false);
+}
+
+void AExhibitManager::TakeVisualCheckShot()
+{
+	// The shot is written at the end of the next rendered frame; quit a moment later.
+	FScreenshotRequest::RequestScreenshot(ShotPath, /*bShowUI*/ true, /*bAddFilenameSuffix*/ false);
+	UE_LOG(LogHuebox, Display, TEXT("HueShot: requested %s"), *ShotPath);
+	GetWorldTimerManager().SetTimer(ShotTimer, FTimerDelegate::CreateWeakLambda(this, []() { FPlatformMisc::RequestExit(false); }), 1.5f, false);
 }
 
 void AExhibitManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -576,8 +623,9 @@ void AExhibitManager::HandleRunTimeout()
 	}
 
 	PushFeedback(EHueFeedbackKind::Error,
-		FString::Printf(TEXT("Time limit (%s s) reached - carriage stopped at %d%% of the track. Press R to reset."),
-			*HueExhibitPrivate::FormatSeconds(LimitSeconds), FMath::RoundToInt(Fraction * 100.f)),
+		FString::Printf(TEXT("Time limit (%s s) reached - %s stopped at %d%% of the track. Press R to reset."),
+			*HueExhibitPrivate::FormatSeconds(LimitSeconds), IsValid(Rig) ? *Rig->GetPerformerName().ToLower() : TEXT("carriage"),
+			FMath::RoundToInt(Fraction * 100.f)),
 		Board);
 }
 

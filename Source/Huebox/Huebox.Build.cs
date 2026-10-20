@@ -12,7 +12,8 @@ public class Huebox : ModuleRules
 			"Engine",
 			"InputCore",
 			"EnhancedInput",
-			"PhysicsCore"
+			"PhysicsCore",
+			"DeveloperSettings"
 		});
 
 		// Sub-folders are include roots, e.g. #include "Core/HueTypes.h".

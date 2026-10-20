@@ -50,7 +50,7 @@ namespace HueCharacterTuning
 	static constexpr float DropHeightAboveFloor = 30.f;
 
 	/** Respawn after a fall when the game mode offers no start spot (= the tutorial's default player spawn). */
-	static const FVector FallbackRespawnLocation(300.f, 1750.f, 120.f);
+	static const FVector FallbackRespawnLocation(300.f, 1200.f, 120.f);
 	static constexpr float FallbackRespawnYaw = -90.f;
 
 	/** A placed block is ~50 cm tall; anything whose feet are below this above the board top would intersect it. */

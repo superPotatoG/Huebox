@@ -145,7 +145,7 @@ void AHueColorShiftBlock::GetPorts(TArray<FHuePort>& OutPorts) const
 
 FString AHueColorShiftBlock::GetRuleText() const
 {
-	return FString::Printf(TEXT("Swaps A and B; N passes unchanged. One-way: accepts pulses travelling %s."),
+	return FString::Printf(TEXT("Turns a pulse into its complementary colour: A <-> B (also G <-> M, Y <-> V); N passes unchanged. One-way: accepts pulses travelling %s."),
 		HueDir::ToString(Facing));
 }
 
@@ -384,29 +384,41 @@ EPulseResponse AHueMixerBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& 
 	// Clear first (++EventSerial invalidates the pending timeout; the waiting signal leaves the cap count).
 	ClearWaiting();
 
-	const bool bIsAB = (FirstColor == EHueColor::A && SecondColor == EHueColor::B)
-		|| (FirstColor == EHueColor::B && SecondColor == EHueColor::A);
-	if (bIsAB)
+	EHueColor Mixed = EHueColor::N;
+	if (HueColor::Mix(FirstColor, SecondColor, Mixed))
 	{
 		LastFailure.Reset();
 		LastFailureMs = -1;
-		const int32 NewId = Sim.EmitPulse(EHueColor::N, Cell, Facing, NowMs, OutOps);
+		const int32 NewId = Sim.EmitPulse(Mixed, Cell, Facing, NowMs, OutOps);
 		if (NewId != INDEX_NONE)
 		{
-			NoteOutput(FString::Printf(TEXT("%s (A+B, dt %.2fs)"), *FormatOutput(EHueColor::N, Facing, NowMs), HueTime::MsToSeconds(DeltaMs)));
+			NoteOutput(FString::Printf(TEXT("%s (%s+%s, dt %.2fs)"), *FormatOutput(Mixed, Facing, NowMs),
+				HueColor::Label(FirstColor), HueColor::Label(SecondColor), HueTime::MsToSeconds(DeltaMs)));
 			Sim.Report(EHueFeedbackKind::Info,
-				FString::Printf(TEXT("%s: A + B -> N (dt %.2f s)"), *DescribeBlock(), HueTime::MsToSeconds(DeltaMs)), Cell);
+				FString::Printf(TEXT("%s: %s + %s -> %s (dt %.2f s)"), *DescribeBlock(),
+					HueColor::Label(FirstColor), HueColor::Label(SecondColor), HueColor::Label(Mixed), HueTime::MsToSeconds(DeltaMs)), Cell);
 		}
 		else
 		{
-			NoteOutput(FString::Printf(TEXT("mixed @%.2fs but the N pulse hit the signal limit"), HueTime::MsToSeconds(NowMs)));
+			NoteOutput(FString::Printf(TEXT("mixed @%.2fs but the %s pulse hit the signal limit"), HueTime::MsToSeconds(NowMs), HueColor::Label(Mixed)));
 		}
 	}
 	else
 	{
-		const FString Reason = (FirstColor == EHueColor::N || SecondColor == EHueColor::N)
-			? FString(TEXT("N cannot be mixed"))
-			: FString::Printf(TEXT("matching colours %s+%s"), HueColor::Label(FirstColor), HueColor::Label(SecondColor));
+		FString Reason;
+		if (FirstColor == EHueColor::N || SecondColor == EHueColor::N)
+		{
+			Reason = TEXT("N cannot be mixed (white already holds every primary)");
+		}
+		else if (FirstColor == SecondColor)
+		{
+			Reason = FString::Printf(TEXT("matching colours %s+%s"), HueColor::Label(FirstColor), HueColor::Label(SecondColor));
+		}
+		else
+		{
+			Reason = FString::Printf(TEXT("%s+%s share %s light"), HueColor::Label(FirstColor), HueColor::Label(SecondColor),
+				*HueColor::DescribePrimaries(HueColor::ToMask(FirstColor) & HueColor::ToMask(SecondColor)));
+		}
 		const FString Detail = FString::Printf(TEXT("in%d %s + in%d %s, both pulses consumed"),
 			FirstInput, HueColor::Label(FirstColor), Input, HueColor::Label(SecondColor));
 		ReportMixFailure(Sim, Reason, Detail, EntryFace);
@@ -498,7 +510,7 @@ FString AHueMixerBlock::GetRuleText() const
 {
 	const AHueBoard* Board = GetBoard();
 	const double WindowSeconds = Board ? Board->MixWindowSeconds : 0.5;
-	return FString::Printf(TEXT("A at one input + B at the other within %s s -> one N pulse out %s. in0 = %s face, in1 = %s face. Matching colours, N or a timeout fail."),
+	return FString::Printf(TEXT("Adds light: one pulse per input within %s s -> one mixed pulse out %s (A + B = N, A + G = Y). in0 = %s face, in1 = %s face. Colours sharing a primary (A + A, anything + N) or a timeout fail."),
 		*FString::SanitizeFloat(WindowSeconds), HueDir::ToString(Facing),
 		HueDir::ToString(GetInputFace(0)), HueDir::ToString(GetInputFace(1)));
 }

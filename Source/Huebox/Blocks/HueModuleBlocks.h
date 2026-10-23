@@ -26,7 +26,8 @@ public:
 	bool TryTurn(EHueDir TravelDir, EHueDir& OutExitDir) const;
 };
 
-/** Colour-shift block: one-way along Facing. Swaps A and B, passes N unchanged, preserves direction. */
+/** Colour-shift block: one-way along Facing. Turns a colour into its complement (A <-> B, G <-> M, Y <-> V), passes N
+ *  unchanged, preserves direction. */
 UCLASS()
 class HUEBOX_API AHueColorShiftBlock : public APulseBlock
 {
@@ -90,9 +91,10 @@ protected:
 
 /**
  * Mixer block: output leaves through Facing. Inputs are the two side faces, RotatePlus90(Facing) (input 0) and
- * RotateMinus90(Facing) (input 1). A and B arriving at different inputs within the mixing window (inclusive)
- * are consumed and one N pulse is emitted. Matching colours, N inputs, or a timeout consume the inputs and
- * report the cause. A second pulse on the already-waiting input is rejected.
+ * RotateMinus90(Facing) (input 1). Two pulses arriving at different inputs within the mixing window (inclusive) are
+ * consumed and, if their colours share no primary, one pulse of the added light is emitted (HueColor::Mix: A + B = N,
+ * A + G = Y, ...). Colours sharing a primary (matching colours, anything with N, A + Y, ...) or a timeout consume the
+ * inputs and report the cause. A second pulse on the already-waiting input is rejected.
  */
 UCLASS()
 class HUEBOX_API AHueMixerBlock : public APulseBlock

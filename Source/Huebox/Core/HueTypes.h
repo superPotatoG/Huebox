@@ -7,13 +7,25 @@ class AHueBoard;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogHuebox, Log, All);
 
-/** Signal colour. A = amber, B = cyan, N = white (neutral / brake). */
+/**
+ * Signal colour: additive light, i.e. a set of the primaries red, green and blue (HueColor::ToMask).
+ *  Motion signals - the only colours the dancer reacts to: A = red (repels), B = cyan = green + blue (attracts),
+ *  N = white = all three (brakes).
+ *  Key colours - no effect of their own, they act on the blocks they hit (a colour brick breaks only for its colour):
+ *  G = green, Y = yellow = red + green, M = magenta = red + blue, V = violet (blue).
+ * The set is closed under mixing (disjoint primaries add up) and colour shift (complement), so every pulse a board
+ * can produce has a letter. Enum order is saved data: append new values at the end.
+ */
 UENUM(BlueprintType)
 enum class EHueColor : uint8
 {
 	A,
 	B,
-	N
+	N,
+	G,
+	Y,
+	M,
+	V
 };
 
 /**
@@ -239,12 +251,32 @@ namespace HueDir
 
 namespace HueColor
 {
-	/** Display colour for a signal colour (amber / cyan / white). */
+	/** Primary bits of HueColor::ToMask. */
+	constexpr uint8 Red = 1;
+	constexpr uint8 Green = 2;
+	constexpr uint8 Blue = 4;
+
+	/** Display colour (red / cyan / white / green / yellow / magenta / violet). */
 	HUEBOX_API FLinearColor ToLinear(EHueColor Color);
-	/** "A", "B" or "N" - letters always accompany colour (accessibility). */
+	/** "A", "B", "N", "G", "Y", "M" or "V" - letters always accompany colour (accessibility). */
 	HUEBOX_API const TCHAR* Label(EHueColor Color);
-	/** Colour-shift rule: A <-> B, N unchanged. */
+	/** Plain name for rule text: "red", "cyan", "white", ... */
+	HUEBOX_API const TCHAR* Name(EHueColor Color);
+	/** Primaries of Color as Red | Green | Blue bits (never 0). */
+	HUEBOX_API uint8 ToMask(EHueColor Color);
+	/** Colour holding exactly the primaries in Mask; false for 0 (no light). */
+	HUEBOX_API bool FromMask(uint8 Mask, EHueColor& OutColor);
+	/** "red", "green + blue", ... for a primary mask (mixer failure text). */
+	HUEBOX_API FString DescribePrimaries(uint8 Mask);
+	/**
+	 * Mixer rule (additive light): two colours without a primary in common add up (A + B = N, A + G = Y, G + V = B,
+	 * Y + V = N, ...). Returns false when they share a primary (matching colours, anything with N, A + Y, ...).
+	 */
+	HUEBOX_API bool Mix(EHueColor First, EHueColor Second, EHueColor& OutMixed);
+	/** Colour-shift rule: the complementary colour (A <-> B, G <-> M, Y <-> V); N passes unchanged. */
 	HUEBOX_API EHueColor Shift(EHueColor Color);
+	/** A, B and N move the dancer; every other colour is a key that only acts on the blocks it hits. */
+	HUEBOX_API bool DrivesRig(EHueColor Color);
 }
 
 namespace HueModule

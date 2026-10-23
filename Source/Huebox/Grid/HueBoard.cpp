@@ -804,7 +804,7 @@ void AHueBoard::RefreshTitle()
 	}
 	else if (bHighlighted)
 	{
-		Color = HueColor::ToLinear(EHueColor::A); // amber
+		Color = FLinearColor(1.00f, 0.50f, 0.04f); // amber (the pre-RGB colour of A; A itself is red now)
 	}
 	Title->SetTextRenderColor(Color.ToFColor(true));
 }

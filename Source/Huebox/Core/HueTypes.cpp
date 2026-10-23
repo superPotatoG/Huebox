@@ -17,11 +17,13 @@ namespace HueTypesPrivate
 		return static_cast<EHueDir>(((Index % 4) + 4) % 4);
 	}
 
-	/** Colour index in [0, 2]; anything invalid is treated as N (the neutral colour). */
+	constexpr int32 NumColors = 7;
+
+	/** Colour index in [0, 6]; anything invalid is treated as N (the neutral colour). */
 	static int32 ColorIndex(EHueColor Color)
 	{
 		const int32 Index = static_cast<int32>(Color);
-		return (Index >= 0 && Index <= 2) ? Index : 2;
+		return (Index >= 0 && Index < NumColors) ? Index : static_cast<int32>(EHueColor::N);
 	}
 
 	/** Module index in [0, 4]; anything invalid is treated as None. */
@@ -83,31 +85,104 @@ const TCHAR* HueDir::ToString(EHueDir Dir)
 
 FLinearColor HueColor::ToLinear(EHueColor Color)
 {
-	// A = amber, B = cyan, N = white. Amber/cyan stay distinguishable for the common colour-vision deficiencies,
-	// and the letter label always accompanies the colour anyway.
-	static const FLinearColor Colors[3] =
+	// Order: A, B, N, G, Y, M, V. A leans red (not amber) so it never reads as Y; the letter label always
+	// accompanies the colour anyway (red / green are hard to tell apart for the common colour-vision deficiencies).
+	static const FLinearColor Colors[HueTypesPrivate::NumColors] =
 	{
-		FLinearColor(1.00f, 0.50f, 0.04f),
-		FLinearColor(0.04f, 0.72f, 1.00f),
-		FLinearColor(0.92f, 0.92f, 0.92f)
+		FLinearColor(1.00f, 0.16f, 0.08f),	// A red
+		FLinearColor(0.04f, 0.72f, 1.00f),	// B cyan
+		FLinearColor(0.92f, 0.92f, 0.92f),	// N white
+		FLinearColor(0.10f, 0.85f, 0.20f),	// G green
+		FLinearColor(1.00f, 0.86f, 0.08f),	// Y yellow
+		FLinearColor(0.95f, 0.18f, 0.85f),	// M magenta
+		FLinearColor(0.32f, 0.30f, 1.00f)	// V violet
 	};
 	return Colors[HueTypesPrivate::ColorIndex(Color)];
 }
 
 const TCHAR* HueColor::Label(EHueColor Color)
 {
-	static const TCHAR* const Labels[3] = { TEXT("A"), TEXT("B"), TEXT("N") };
+	static const TCHAR* const Labels[HueTypesPrivate::NumColors] =
+		{ TEXT("A"), TEXT("B"), TEXT("N"), TEXT("G"), TEXT("Y"), TEXT("M"), TEXT("V") };
 	return Labels[HueTypesPrivate::ColorIndex(Color)];
+}
+
+const TCHAR* HueColor::Name(EHueColor Color)
+{
+	static const TCHAR* const Names[HueTypesPrivate::NumColors] =
+		{ TEXT("red"), TEXT("cyan"), TEXT("white"), TEXT("green"), TEXT("yellow"), TEXT("magenta"), TEXT("violet") };
+	return Names[HueTypesPrivate::ColorIndex(Color)];
+}
+
+uint8 HueColor::ToMask(EHueColor Color)
+{
+	static const uint8 Masks[HueTypesPrivate::NumColors] =
+	{
+		Red,				// A
+		Green | Blue,		// B
+		Red | Green | Blue,	// N
+		Green,				// G
+		Red | Green,		// Y
+		Red | Blue,			// M
+		Blue				// V
+	};
+	return Masks[HueTypesPrivate::ColorIndex(Color)];
+}
+
+bool HueColor::FromMask(uint8 Mask, EHueColor& OutColor)
+{
+	const uint8 Primaries = Mask & (Red | Green | Blue);
+	for (int32 Index = 0; Primaries != 0 && Index < HueTypesPrivate::NumColors; ++Index)
+	{
+		const EHueColor Candidate = static_cast<EHueColor>(Index);
+		if (ToMask(Candidate) == Primaries)
+		{
+			OutColor = Candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+FString HueColor::DescribePrimaries(uint8 Mask)
+{
+	TArray<FString, TInlineAllocator<3>> Parts;
+	if (Mask & Red)
+	{
+		Parts.Add(TEXT("red"));
+	}
+	if (Mask & Green)
+	{
+		Parts.Add(TEXT("green"));
+	}
+	if (Mask & Blue)
+	{
+		Parts.Add(TEXT("blue"));
+	}
+	return Parts.Num() > 0 ? FString::Join(Parts, TEXT(" + ")) : FString(TEXT("no light"));
+}
+
+bool HueColor::Mix(EHueColor First, EHueColor Second, EHueColor& OutMixed)
+{
+	const uint8 FirstMask = ToMask(First);
+	const uint8 SecondMask = ToMask(Second);
+	if ((FirstMask & SecondMask) != 0)
+	{
+		return false;
+	}
+	return FromMask(FirstMask | SecondMask, OutMixed);
 }
 
 EHueColor HueColor::Shift(EHueColor Color)
 {
-	switch (Color)
-	{
-	case EHueColor::A: return EHueColor::B;
-	case EHueColor::B: return EHueColor::A;
-	default:           return EHueColor::N;
-	}
+	// White has no complement (that would be no light at all), so N passes unchanged.
+	EHueColor Complement = EHueColor::N;
+	return FromMask(ToMask(Color) ^ (Red | Green | Blue), Complement) ? Complement : EHueColor::N;
+}
+
+bool HueColor::DrivesRig(EHueColor Color)
+{
+	return Color == EHueColor::A || Color == EHueColor::B || Color == EHueColor::N;
 }
 
 // ---- HueModule ------------------------------------------------------------------------------------------------

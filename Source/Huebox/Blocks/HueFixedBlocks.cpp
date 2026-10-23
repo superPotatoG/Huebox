@@ -11,6 +11,10 @@ namespace HueFixedBlocksPrivate
 	/** Barrier: a near-black tile filling the cell, a little thicker. */
 	const FVector BarrierTileScale(0.98f, 0.98f, 0.1f);
 	const FLinearColor BarrierColor(0.04f, 0.04f, 0.045f);
+	/** Colour brick: a thick slab in its colour filling the cell; once broken, a thin dark rim stays as a trace. */
+	const FVector BrickStandingScale(0.98f, 0.98f, 0.16f);
+	const FVector BrickBrokenScale(0.9f, 0.9f, 0.015f);
+	constexpr float BrickBrokenDim = 0.22f;
 }
 
 // =============================================================================================================
@@ -96,6 +100,20 @@ EPulseResponse AHueReceiverBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsyste
 	{
 		ReportBlocked(Pulse, Sim, FString::Printf(TEXT("no input on the %s face (accepts: %s)"),
 			HueDir::ToString(EntryFace), *DescribeAcceptFaces()));
+		return EPulseResponse::Consumed;
+	}
+
+	if (!HueColor::DrivesRig(Pulse.Color))
+	{
+		// Key colours mean nothing to the dancer: absorbed without joining this instant's colour group, so they
+		// can neither move her nor cancel an A / B / N arriving at the same time.
+		LastInputText = FString::Printf(TEXT("ignored: %s from %s @%.2fs"),
+			HueColor::Label(Pulse.Color), HueDir::ToString(EntryFace), HueTime::MsToSeconds(Sim.GetSimTimeMs()));
+		Sim.Report(EHueFeedbackKind::Warning,
+			FString::Printf(TEXT("%s: the dancer only reacts to A, B or N - the %s (%s) pulse was absorbed"),
+				*DescribeBlock(), HueColor::Label(Pulse.Color), HueColor::Name(Pulse.Color)),
+			Cell);
+		FlashBlocked(EntryFace);
 		return EPulseResponse::Consumed;
 	}
 
@@ -189,7 +207,7 @@ void AHueReceiverBlock::GetPorts(TArray<FHuePort>& OutPorts) const
 
 FString AHueReceiverBlock::GetRuleText() const
 {
-	return FString::Printf(TEXT("Drives the carriage: A repels, B attracts, N brakes. Accepts pulses through: %s. Different colours at the same moment cancel."),
+	return FString::Printf(TEXT("Drives the dancer: A repels, B attracts, N brakes; other colours are absorbed. Accepts pulses through: %s. Different colours at the same moment cancel."),
 		*DescribeAcceptFaces());
 }
 
@@ -267,4 +285,119 @@ FString AHueBarrierBlock::GetRuleText() const
 FString AHueBarrierBlock::GetStateText() const
 {
 	return LastInputText.IsEmpty() ? FString(TEXT("Absorbs pulses")) : LastInputText;
+}
+
+// =============================================================================================================
+// Colour brick
+// =============================================================================================================
+
+AHueColorBrickBlock::AHueColorBrickBlock()
+{
+	bRemovable = false;
+	ModuleType = EHueModuleType::None;
+	BlockDisplayName = TEXT("Colour brick");
+	BodyScale = HueFixedBlocksPrivate::BrickStandingScale;
+	ApplyBodyLayout();
+	BaseColor = HueColor::ToLinear(BrickColor);
+	SetLabelText(FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor)), TileLabelColor());
+}
+
+EPulseResponse AHueColorBrickBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
+{
+	const int64 NowMs = Sim.GetSimTimeMs();
+	if (bBroken)
+	{
+		// An open cell: the pulse travels on unchanged.
+		NoteInput(Pulse, Sim);
+		NoteOutput(FormatOutput(Pulse.Color, Pulse.Direction, NowMs));
+		return EPulseResponse::Continue;
+	}
+
+	if (Pulse.Color == BrickColor)
+	{
+		// The key is spent on the brick. It opens when this instant ends (OnTimeGroupEnd), so whether another pulse
+		// arriving at the very same time passes never depends on the order the queue processes them in.
+		NoteInput(Pulse, Sim);
+		if (!bBreakPending)
+		{
+			bBreakPending = true;
+			Sim.Report(EHueFeedbackKind::Info,
+				FString::Printf(TEXT("%s: broken by %s at %.2fs - the way is open"), *DescribeBlock(), HueColor::Label(Pulse.Color),
+					HueTime::MsToSeconds(NowMs)),
+				Cell);
+		}
+		NoteOutput(FString::Printf(TEXT("breaking @%.2fs"), HueTime::MsToSeconds(NowMs)));
+		return EPulseResponse::Consumed;
+	}
+
+	ReportBlocked(Pulse, Sim, FString::Printf(TEXT("only %s (%s) light breaks it - the %s pulse was blocked"),
+		HueColor::Label(BrickColor), HueColor::Name(BrickColor), HueColor::Label(Pulse.Color)));
+	return EPulseResponse::Consumed;
+}
+
+void AHueColorBrickBlock::OnTimeGroupEnd(UPulseSubsystem& Sim)
+{
+	if (!bBreakPending)
+	{
+		return;
+	}
+	bBreakPending = false;
+	bBroken = true;
+	BrokenAtMs = Sim.GetSimTimeMs();
+	NoteOutput(FString::Printf(TEXT("broken @%.2fs"), HueTime::MsToSeconds(BrokenAtMs)));
+	RefreshVisuals();
+}
+
+void AHueColorBrickBlock::ResetBlock()
+{
+	bBroken = false;
+	bBreakPending = false;
+	BrokenAtMs = -1;
+	Super::ResetBlock();
+}
+
+FString AHueColorBrickBlock::GetRuleText() const
+{
+	return FString::Printf(TEXT("A lock: only a %s (%s) pulse breaks it, and is used up doing so. Other colours are blocked while it stands; once broken, pulses pass straight through. Reset restores it."),
+		HueColor::Label(BrickColor), HueColor::Name(BrickColor));
+}
+
+FString AHueColorBrickBlock::GetStateText() const
+{
+	if (bBroken)
+	{
+		return FString::Printf(TEXT("Broken at %.2f s - open | %s"), HueTime::MsToSeconds(BrokenAtMs), *Super::GetStateText());
+	}
+	return FString::Printf(TEXT("Standing - needs %s | %s"), HueColor::Label(BrickColor), *Super::GetStateText());
+}
+
+void AHueColorBrickBlock::RefreshVisuals()
+{
+	const FLinearColor Color = HueColor::ToLinear(BrickColor);
+	const FVector WantedScale = bBroken ? HueFixedBlocksPrivate::BrickBrokenScale : HueFixedBlocksPrivate::BrickStandingScale;
+	if (!BodyScale.Equals(WantedScale))
+	{
+		BodyScale = WantedScale;
+		ApplyBodyLayout();
+	}
+
+	if (bBroken)
+	{
+		BaseColor = FLinearColor(Color.R * HueFixedBlocksPrivate::BrickBrokenDim, Color.G * HueFixedBlocksPrivate::BrickBrokenDim,
+			Color.B * HueFixedBlocksPrivate::BrickBrokenDim, 1.f);
+		LabelString = TEXT("open");
+	}
+	else
+	{
+		BaseColor = Color;
+		LabelString = FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor));
+	}
+	LabelColor = ContrastTextColor(BaseColor);
+	Super::RefreshVisuals();
+}
+
+void AHueColorBrickBlock::SetBrickColor(EHueColor InColor)
+{
+	BrickColor = InColor;
+	RefreshVisuals();
 }

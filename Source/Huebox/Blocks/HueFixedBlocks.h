@@ -107,3 +107,40 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 };
+
+/**
+ * Colour brick: a lock that only its own colour opens. A pulse of BrickColor hitting it through any face is used up
+ * breaking it; from the end of that logical instant the cell is open and later pulses pass straight through,
+ * unchanged. Any other colour is blocked while it stands. Reset restores the brick. Fixed.
+ */
+UCLASS()
+class HUEBOX_API AHueColorBrickBlock : public APulseBlock
+{
+	GENERATED_BODY()
+
+public:
+	AHueColorBrickBlock();
+
+	virtual EPulseResponse ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim) override;
+	virtual void OnTimeGroupEnd(UPulseSubsystem& Sim) override;
+	virtual void ResetBlock() override;
+	virtual FString GetRuleText() const override;
+	virtual FString GetStateText() const override;
+	virtual void RefreshVisuals() override;
+
+	EHueColor GetBrickColor() const { return BrickColor; }
+	void SetBrickColor(EHueColor InColor);
+	bool IsBroken() const { return bBroken; }
+	/** Logical time (ms) the brick broke this attempt; -1 while it stands. */
+	int64 GetBrokenAtMs() const { return BrokenAtMs; }
+
+protected:
+	UPROPERTY(EditAnywhere, Category = "Hue|Brick")
+	EHueColor BrickColor = EHueColor::Y;
+
+	bool bBroken = false;
+	/** A matching pulse hit it during the current instant; it opens in OnTimeGroupEnd, so pulses arriving at the same
+	 *  time are still blocked whatever order the queue hands them over in. */
+	bool bBreakPending = false;
+	int64 BrokenAtMs = -1;
+};

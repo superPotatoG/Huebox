@@ -337,6 +337,20 @@ namespace HueHUD
 			Tile.Fill = BarrierFill;
 			Tile.bSolid = true;
 		}
+		else if (const AHueColorBrickBlock* Brick = Cast<AHueColorBrickBlock>(&Block))
+		{
+			// Standing: a tile in the brick's colour lettered with the key it needs. Broken: a dimmed, empty tile.
+			const FLinearColor BrickColor = HueColor::ToLinear(Brick->GetBrickColor());
+			if (Brick->IsBroken())
+			{
+				Tile.Fill = FLinearColor(BrickColor.R * 0.3f, BrickColor.G * 0.3f, BrickColor.B * 0.3f, 1.f);
+			}
+			else
+			{
+				Tile.Fill = BrickColor;
+				Tile.Letter = HueColor::Label(Brick->GetBrickColor());
+			}
+		}
 		else
 		{
 			Tile.Letter = ModuleLetter(Block.GetModuleType());
@@ -454,7 +468,7 @@ namespace HueHUD
 	};
 
 	static const TCHAR* const BuildHelpFooter = TEXT("Modules come from this board's tray; collected blocks go back into it.");
-	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  (dots = pulses)");
+	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  Y-tile brick  (dots = pulses)");
 
 	/** Bottom hint bar of the Build view. */
 	static const FBinding BuildHints[] =

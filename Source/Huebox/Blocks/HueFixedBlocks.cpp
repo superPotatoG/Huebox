@@ -11,12 +11,11 @@ namespace HueFixedBlocksPrivate
 	/** Barrier: a near-black tile filling the cell, a little thicker. */
 	const FVector BarrierTileScale(0.98f, 0.98f, 0.1f);
 	const FLinearColor BarrierColor(0.04f, 0.04f, 0.045f);
-	/** Brick: a thick stone-coloured slab filling the cell (no signal colour: any light breaks it); once broken, a thin
-	 *  dark rim stays as a trace. */
+	/** Brick: a thick slab in its colour filling the cell (thicker than the flat sources); once broken, a thin dark rim
+	 *  stays as a trace. */
 	const FVector BrickStandingScale(0.98f, 0.98f, 0.16f);
 	const FVector BrickBrokenScale(0.9f, 0.9f, 0.015f);
-	const FLinearColor BrickColor(0.55f, 0.42f, 0.32f);
-	const FLinearColor BrickBrokenColor(0.12f, 0.1f, 0.08f);
+	constexpr float BrickBrokenDim = 0.22f;
 }
 
 // =============================================================================================================
@@ -326,8 +325,8 @@ AHueBrickBlock::AHueBrickBlock()
 	BlockDisplayName = TEXT("Brick");
 	BodyScale = HueFixedBlocksPrivate::BrickStandingScale;
 	ApplyBodyLayout();
-	BaseColor = HueFixedBlocksPrivate::BrickColor;
-	SetLabelText(TEXT("BRICK"), TileLabelColor());
+	BaseColor = HueColor::ToLinear(BrickColor);
+	SetLabelText(FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor)), TileLabelColor());
 }
 
 EPulseResponse AHueBrickBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -341,8 +340,17 @@ EPulseResponse AHueBrickBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& 
 		return EPulseResponse::Continue;
 	}
 
-	// Any light breaks it and is used up doing so. It opens when this instant ends (OnTimeGroupEnd), so every pulse
-	// arriving at the very same time is spent too, whatever order the queue hands them over in.
+	if (Pulse.Color != BrickColor)
+	{
+		ReportBlocked(Pulse, Sim, bBreakPending
+			? FString::Printf(TEXT("the %s pulse arrived in the same instant it broke - blocked"), HueColor::Label(Pulse.Color))
+			: FString::Printf(TEXT("only %s (%s) light breaks it - the %s pulse was blocked"),
+				HueColor::Label(BrickColor), HueColor::Name(BrickColor), HueColor::Label(Pulse.Color)));
+		return EPulseResponse::Consumed;
+	}
+
+	// The key is used up on the brick. It opens when this instant ends (OnTimeGroupEnd), so whether another pulse
+	// arriving at the very same time passes never depends on the order the queue processes them in.
 	NoteInput(Pulse, Sim);
 	if (!bBreakPending)
 	{
@@ -350,13 +358,6 @@ EPulseResponse AHueBrickBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& 
 		Sim.Report(EHueFeedbackKind::Info,
 			FString::Printf(TEXT("%s: broken by %s at %.2fs - that pulse was used up, the way is open"), *DescribeBlock(),
 				HueColor::Label(Pulse.Color), HueTime::MsToSeconds(NowMs)),
-			Cell);
-	}
-	else
-	{
-		Sim.Report(EHueFeedbackKind::Warning,
-			FString::Printf(TEXT("%s: the %s pulse hit it in the same instant it broke - used up as well"), *DescribeBlock(),
-				HueColor::Label(Pulse.Color)),
 			Cell);
 	}
 	NoteOutput(FString::Printf(TEXT("breaking @%.2fs"), HueTime::MsToSeconds(NowMs)));
@@ -386,7 +387,8 @@ void AHueBrickBlock::ResetBlock()
 
 FString AHueBrickBlock::GetRuleText() const
 {
-	return TEXT("Breaks for any light - and the pulse that breaks it is used up. Once broken, pulses pass straight through. Reset restores it.");
+	return FString::Printf(TEXT("A lock: only %s (%s) light breaks it, and that pulse is used up. Other colours are blocked while it stands; once broken, pulses pass straight through. Reset restores it."),
+		HueColor::Label(BrickColor), HueColor::Name(BrickColor));
 }
 
 FString AHueBrickBlock::GetStateText() const
@@ -395,7 +397,7 @@ FString AHueBrickBlock::GetStateText() const
 	{
 		return FString::Printf(TEXT("Broken at %.2f s - open | %s"), HueTime::MsToSeconds(BrokenAtMs), *Super::GetStateText());
 	}
-	return FString::Printf(TEXT("Standing | %s"), *Super::GetStateText());
+	return FString::Printf(TEXT("Standing - needs %s | %s"), HueColor::Label(BrickColor), *Super::GetStateText());
 }
 
 void AHueBrickBlock::RefreshVisuals()
@@ -407,8 +409,24 @@ void AHueBrickBlock::RefreshVisuals()
 		ApplyBodyLayout();
 	}
 
-	BaseColor = bBroken ? HueFixedBlocksPrivate::BrickBrokenColor : HueFixedBlocksPrivate::BrickColor;
-	LabelString = bBroken ? TEXT("open") : TEXT("BRICK");
+	const FLinearColor Color = HueColor::ToLinear(BrickColor);
+	if (bBroken)
+	{
+		BaseColor = FLinearColor(Color.R * HueFixedBlocksPrivate::BrickBrokenDim, Color.G * HueFixedBlocksPrivate::BrickBrokenDim,
+			Color.B * HueFixedBlocksPrivate::BrickBrokenDim, 1.f);
+		LabelString = TEXT("open");
+	}
+	else
+	{
+		BaseColor = Color;
+		LabelString = FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor));
+	}
 	LabelColor = ContrastTextColor(BaseColor);
 	Super::RefreshVisuals();
+}
+
+void AHueBrickBlock::SetBrickColor(EHueColor InColor)
+{
+	BrickColor = InColor;
+	RefreshVisuals();
 }

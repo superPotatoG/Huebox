@@ -49,6 +49,8 @@ public:
 	/** Placement / collection / rotation / delay edits are only allowed in Build. */
 	bool IsEditingAllowed() const { return State == EHueRunState::Build; }
 	double GetRunTimeSeconds() const;
+	/** Why the current attempt ended (Ended state only): time limit, ran into a board, ... Empty otherwise. */
+	const FString& GetEndReason() const { return EndReason; }
 
 	// ---- Feedback -------------------------------------------------------------------------------------------
 	void PushFeedback(EHueFeedbackKind Kind, const FString& Message, AHueBoard* Board = nullptr);
@@ -67,6 +69,8 @@ protected:
 	void SetState(EHueRunState NewState);
 	void HandleRunComplete();
 	void HandleRunTimeout();
+	/** The attempt failed before the time limit (the performer ran into a stage board): Ended at once. */
+	void HandleRunFailed(const FString& Reason);
 	void UpdateHighlights();
 
 	/** Bound to UPulseSubsystem::OnFeedback (dynamic delegate, removed in EndPlay). */
@@ -119,6 +123,7 @@ private:
 	double RunClockSeconds = 0.0;
 	/** Run time captured when an attempt completed / ended (the simulation is cleared at that point). */
 	double FrozenRunTimeSeconds = 0.0;
+	FString EndReason;
 
 	/** Delayed self-test start (bound to a UObject method, cleared in EndPlay). */
 	FTimerHandle SelfTestStartTimer;

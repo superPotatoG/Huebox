@@ -12,8 +12,9 @@ DECLARE_LOG_CATEGORY_EXTERN(LogHuebox, Log, All);
  *  Motion signals - the only colours the dancer reacts to: A = red (repels), B = cyan = green + blue (attracts),
  *  N = white = all three (brakes).
  *  Key colours - they never move the dancer: G = green, Y = yellow = red + green, M = magenta = red + blue,
- *  V = violet (blue). A key colour reaching the dancer makes her do that colour's move where she is; objectives ask
- *  for it inside a zone of that colour ("the yellow move in the yellow spotlight"). The move itself is skin data.
+ *  V = violet (blue). A key colour reaching the dancer makes her do that colour's move where she is; a board of that
+ *  colour on her track breaks only for it (EHueObjectiveType::BreakBoard). The move itself is skin data.
+ *  Colour is always a key and a lock of the same colour opens: on the grid a brick (AHueBrickBlock), on the stage a board.
  * The set is closed under mixing (disjoint primaries add up) and colour shift (complement), so every pulse a board
  * can produce has a letter. Enum order is saved data: append new values at the end.
  */
@@ -173,9 +174,12 @@ enum class EHueObjectiveType : uint8
 	ReturnBelow,
 	/** Inside [ZoneMin, ZoneMax], slower than MaxSpeedFraction * TrackLength, for HoldSeconds. */
 	StopInZone,
-	/** A key colour (Color, e.g. Y) reaches the performer while it is inside [ZoneMin, ZoneMax] (moving or not): it does
-	 *  that colour's move in the zone ("the yellow move in the yellow spotlight"). */
-	KeyActionInZone
+	/**
+	 * A board in Color stands on the track; the performer's centre meets it at TrackFraction. Only that colour's move
+	 * breaks it, and only from the strike zone [ZoneMin, ZoneMax] in front of it: a move made earlier misses, and
+	 * running into the unbroken board fails the attempt at once. Complete when the board breaks.
+	 */
+	BreakBoard
 };
 
 /** One ordered objective. Only the current (first incomplete) objective can be completed. */
@@ -243,6 +247,9 @@ struct FHueRigSample
 	bool bKeyAction = false;
 	EHueColor KeyActionColor = EHueColor::N;
 	float KeyActionFraction = 0.f;
+
+	/** The performer ran into an unbroken stage board and fell (stays true until the rig is reset). */
+	bool bCrashed = false;
 };
 
 namespace HueDir

@@ -118,9 +118,10 @@ public:
 };
 
 /**
- * Brick: opens the way for later light. The first pulse of any colour hitting it (any face) is used up breaking it;
- * from the end of that logical instant the cell is open and later pulses pass straight through, unchanged. Every
- * pulse arriving in the instant it breaks is used up too. Reset restores the brick. Fixed.
+ * Brick: a lock on the grid that only its own colour opens (the grid twin of the stage board). A pulse of BrickColor
+ * hitting it through any face is used up breaking it; from the end of that logical instant the cell is open and later
+ * pulses pass straight through, unchanged. Any other colour is blocked while it stands. Reset restores the brick.
+ * Fixed. Labelled "BRICK <letter>" so it is not mistaken for a source of that colour (art comes later).
  */
 UCLASS()
 class HUEBOX_API AHueBrickBlock : public APulseBlock
@@ -137,14 +138,19 @@ public:
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
 
+	EHueColor GetBrickColor() const { return BrickColor; }
+	void SetBrickColor(EHueColor InColor);
 	bool IsBroken() const { return bBroken; }
 	/** Logical time (ms) the brick broke this attempt; -1 while it stands. */
 	int64 GetBrokenAtMs() const { return BrokenAtMs; }
 
 protected:
+	UPROPERTY(EditAnywhere, Category = "Hue|Brick")
+	EHueColor BrickColor = EHueColor::B;
+
 	bool bBroken = false;
-	/** A pulse hit it during the current instant; it opens in OnTimeGroupEnd, so pulses arriving at the same time are
-	 *  spent as well whatever order the queue hands them over in. */
+	/** A matching pulse hit it during the current instant; it opens in OnTimeGroupEnd, so pulses arriving at the same
+	 *  time are still stopped whatever order the queue hands them over in. */
 	bool bBreakPending = false;
 	int64 BrokenAtMs = -1;
 };

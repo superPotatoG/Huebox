@@ -66,9 +66,22 @@ namespace HueRigPrivate
 
 	/** Key moves: how long the key letter shows when the skin has no key-action animation. */
 	constexpr float KeyActionLetterSeconds = 1.0f;
-	/** Key-zone spotlight / plate glow (multiplies the key colour; the unlit material blooms above 1). */
-	constexpr float KeyZoneDimGlow = 3.5f;
-	constexpr float KeyZoneLitGlow = 10.f;
+	/** A key move's hit lands this long after the move starts; a broken board's panel disappears then. */
+	constexpr float KeyActionHitSeconds = 0.25f;
+	/** Strike-zone spotlight / plate glow (multiplies the key colour; the unlit material blooms above 1). */
+	constexpr float StrikeZoneDimGlow = 3.5f;
+	constexpr float StrikeZoneLitGlow = 10.f;
+	/** Stage board panel (cm): thin along the track, as wide as the track area, taller than the dancer. */
+	constexpr float BoardThickness = 8.f;
+	constexpr float BoardDepth = 90.f;
+	constexpr float BoardHeight = 170.f;
+	constexpr float BoardGlow = 2.5f;
+	constexpr float BoardLetterSize = 48.f;
+	/** How far a figure riding without the carriage box reaches ahead of its centre (cm). */
+	constexpr float PerformerFrontOffset = 15.f;
+	/** Marks where key moves happened: short posts on the viewer side of the track. */
+	constexpr float MoveMarkHeight = 30.f;
+	constexpr float MoveMarkGlow = 2.f;
 
 	static const FLinearColor TrackColor(0.4f, 0.42f, 0.45f);
 	static const FLinearColor StopColor(0.15f, 0.15f, 0.15f);
@@ -334,9 +347,17 @@ void AReactiveRig::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	UpdateStageBoards(DeltaSeconds);
 	UpdatePerformer(DeltaSeconds);
 
 	if (!bMotionActive || bMotionPaused || !IsValid(Carriage) || !Carriage->IsSimulatingPhysics())
+	{
+		return;
+	}
+
+	// A board reached during the last physics step stops the performer before any force is added this frame.
+	CheckStageBoardContact();
+	if (bCrashed)
 	{
 		return;
 	}
@@ -377,18 +398,38 @@ void AReactiveRig::ApplyColor(EHueColor NewColor)
 
 void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 {
+	using namespace HueRigPrivate;
+
 	const float Fraction = GetCarriageFraction();
 	bKeyActionPending = true;
 	PendingKeyColor = KeyColor;
 	PendingKeyFraction = Fraction;
 
-	// The lock this key opens: every zone of its colour the performer stands in right now lights up.
-	for (int32 Index = 0; Index < KeyZones.Num() && Index < KeyZoneMIDs.Num(); ++Index)
+	// Where the move happened stays marked on the stage, so the next attempt can be tuned by eye.
+	if (StageBoards.Num() > 0 && TrackLength > KINDA_SMALL_NUMBER)
 	{
-		const FHueObjective& Zone = KeyZones[Index];
-		if (Zone.Color == KeyColor && Fraction >= Zone.ZoneMin && Fraction <= Zone.ZoneMax && KeyZoneMIDs[Index])
+		AddMarkerMesh(FVector(Fraction * TrackLength, MarkerSideOffset, MoveMarkHeight * 0.5f),
+			FVector(PostThickness / 100.f, PostThickness / 100.f, MoveMarkHeight / 100.f), HueColor::ToLinear(KeyColor) * MoveMarkGlow,
+			nullptr, /*bFlat*/ true, FRotator::ZeroRotator, &MoveMarks);
+	}
+	if (bCrashed)
+	{
+		return; // already down: no move, nothing breaks
+	}
+
+	// The lock this key opens: an unbroken board of its colour, when the performer is within reach (strike zone).
+	// The panel disappears when the hit lands, a moment later; the way is open from now on.
+	for (int32 Index = 0; Index < StageBoards.Num(); ++Index)
+	{
+		FStageBoard& Board = StageBoards[Index];
+		if (!Board.bBroken && Board.Color == KeyColor && Fraction >= Board.StrikeMin && Fraction <= Board.StrikeMax)
 		{
-			KeyZoneMIDs[Index]->SetVectorParameterValue(TEXT("Color"), KeyZoneColor(KeyColor, /*bLit*/ true));
+			Board.bBroken = true;
+			Board.HideTimeLeft = KeyActionHitSeconds;
+			if (StageBoardGlowMIDs.IsValidIndex(Index) && StageBoardGlowMIDs[Index])
+			{
+				StageBoardGlowMIDs[Index]->SetVectorParameterValue(TEXT("Color"), StrikeZoneColor(KeyColor, /*bLit*/ true));
+			}
 		}
 	}
 
@@ -417,21 +458,121 @@ void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 	}
 }
 
-FLinearColor AReactiveRig::KeyZoneColor(EHueColor KeyColor, bool bLit) const
+FLinearColor AReactiveRig::StrikeZoneColor(EHueColor KeyColor, bool bLit) const
 {
 	// HDR emissive on the unlit material: dim enough to read as "waiting" against the glowing screen, bright once lit.
-	return HueColor::ToLinear(KeyColor) * (bLit ? HueRigPrivate::KeyZoneLitGlow : HueRigPrivate::KeyZoneDimGlow);
+	return HueColor::ToLinear(KeyColor) * (bLit ? HueRigPrivate::StrikeZoneLitGlow : HueRigPrivate::StrikeZoneDimGlow);
 }
 
-void AReactiveRig::SetKeyZonesLit(bool bLit)
+void AReactiveRig::RestoreStageBoards()
 {
-	for (int32 Index = 0; Index < KeyZones.Num() && Index < KeyZoneMIDs.Num(); ++Index)
+	for (int32 Index = 0; Index < StageBoards.Num(); ++Index)
 	{
-		if (KeyZoneMIDs[Index])
+		FStageBoard& Board = StageBoards[Index];
+		Board.bBroken = false;
+		Board.HideTimeLeft = -1.f;
+		if (StageBoardMeshes.IsValidIndex(Index) && StageBoardMeshes[Index])
 		{
-			KeyZoneMIDs[Index]->SetVectorParameterValue(TEXT("Color"), KeyZoneColor(KeyZones[Index].Color, bLit));
+			StageBoardMeshes[Index]->SetVisibility(true);
+		}
+		if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
+		{
+			StageBoardLabels[Index]->SetVisibility(true);
+		}
+		if (StageBoardGlowMIDs.IsValidIndex(Index) && StageBoardGlowMIDs[Index])
+		{
+			StageBoardGlowMIDs[Index]->SetVectorParameterValue(TEXT("Color"), StrikeZoneColor(Board.Color, /*bLit*/ false));
 		}
 	}
+}
+
+void AReactiveRig::UpdateStageBoards(float DeltaSeconds)
+{
+	const float Fraction = StageBoards.Num() > 0 ? GetCarriageFraction() : 0.f;
+	for (int32 Index = 0; Index < StageBoards.Num(); ++Index)
+	{
+		FStageBoard& Board = StageBoards[Index];
+		if (Board.HideTimeLeft < 0.f)
+		{
+			continue;
+		}
+		Board.HideTimeLeft -= FMath::Max(DeltaSeconds, 0.f);
+		// The panel goes when the hit lands - or when she reaches it first (a strike from the end of the zone bursts
+		// through), so she never runs into a board that is already broken.
+		if (Board.HideTimeLeft <= 0.f || Fraction >= Board.ContactFraction)
+		{
+			Board.HideTimeLeft = -1.f;
+			if (StageBoardMeshes.IsValidIndex(Index) && StageBoardMeshes[Index])
+			{
+				StageBoardMeshes[Index]->SetVisibility(false);
+			}
+			if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
+			{
+				StageBoardLabels[Index]->SetVisibility(false);
+			}
+		}
+	}
+}
+
+void AReactiveRig::CheckStageBoardContact()
+{
+	if (bCrashed || StageBoards.Num() == 0 || TrackLength <= KINDA_SMALL_NUMBER || !IsValid(Carriage))
+	{
+		return;
+	}
+
+	const float Fraction = GetCarriageFraction();
+	const float StartFraction = static_cast<float>(GetLocalStart().X) / TrackLength;
+	for (const FStageBoard& Board : StageBoards)
+	{
+		// Boards stand ahead of the start; an unbroken one stops the performer at its contact line.
+		if (Board.bBroken || StartFraction >= Board.ContactFraction || Fraction < Board.ContactFraction)
+		{
+			continue;
+		}
+
+		bCrashed = true;
+		CrashBoardColor = Board.Color;
+		// Back to the contact line (at most one frame of overshoot), then frozen for good: the attempt has failed.
+		const FVector ContactLocal(Board.ContactFraction * TrackLength, 0.f, HueRigPrivate::CarriageCenterZ);
+		Carriage->SetWorldLocation(GetActorTransform().TransformPosition(ContactLocal), false, nullptr, ETeleportType::TeleportPhysics);
+		FreezeMotion();
+
+		// Presentation: she falls backwards (the skin's crash animation, held on its last pose).
+		KeyActionTimeLeft = 0.f;
+		if (CrashAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
+		{
+			Figure->SetPlayRate(1.f);
+			Figure->PlayAnimation(CrashAnim, /*bLooping*/ false);
+			bPlayingMoveAnim = false;
+		}
+		UpdateColorVisuals(); // a key letter still showing goes back to the motion colour
+		if (CarriageLabel)
+		{
+			// The fall carries the figure away from the body it rode on; a letter left floating there would mislead.
+			// ResetRig (ApplyColor) brings it back.
+			CarriageLabel->SetText(FText::GetEmpty());
+		}
+		const FLinearColor Color = HueColor::ToLinear(Board.Color);
+		if (StateLabel)
+		{
+			StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: hit the %s board"), *GetPerformerName(), HueColor::Label(Board.Color))));
+			StateLabel->SetTextRenderColor(Color.ToFColor(true));
+		}
+		break;
+	}
+}
+
+void AReactiveRig::ClearMoveMarks()
+{
+	for (UStaticMeshComponent* Mark : MoveMarks)
+	{
+		if (IsValid(Mark))
+		{
+			Mark->DestroyComponent();
+		}
+	}
+	MoveMarks.Reset();
 }
 
 void AReactiveRig::SetMotionActive(bool bActive)
@@ -520,12 +661,15 @@ void AReactiveRig::ResetRig()
 	bMotionPaused = false;
 	PausedVelocity = FVector::ZeroVector;
 	bKeyActionPending = false;
-	if (KeyActionTimeLeft > 0.f)
+	const bool bWasPerforming = KeyActionTimeLeft > 0.f || bCrashed;
+	KeyActionTimeLeft = 0.f;
+	bCrashed = false;
+	if (bWasPerforming)
 	{
-		KeyActionTimeLeft = 0.f;
 		ResumeLoopAnimation();
 	}
-	SetKeyZonesLit(false);
+	RestoreStageBoards();
+	ClearMoveMarks();
 	ApplyColor(EHueColor::N);
 	AttemptMaxFraction = TrackLength > KINDA_SMALL_NUMBER ? static_cast<float>(GetLocalStart().X) / TrackLength : 0.f;
 }
@@ -607,6 +751,7 @@ FHueRigSample AReactiveRig::MakeSample() const
 	Sample.bKeyAction = bKeyActionPending;
 	Sample.KeyActionColor = PendingKeyColor;
 	Sample.KeyActionFraction = PendingKeyFraction;
+	Sample.bCrashed = bCrashed;
 	return Sample;
 }
 
@@ -635,11 +780,21 @@ FHueMotionPrediction AReactiveRig::PredictMotion(const TArray<FHueColorEvent>& E
 	int32 NextEvent = 0;
 	Result.MaxFraction = X / TrackLength;
 
+	// Own copy of the stage boards, all standing (as at the start of an attempt).
+	TArray<FStageBoard> Boards = StageBoards;
+	for (FStageBoard& Board : Boards)
+	{
+		Board.bBroken = false;
+	}
+	const float StartFraction = X / TrackLength;
+	bool bCrashedHere = false;
+
 	const int32 NumSteps = FMath::Max(0, FMath::CeilToInt32(static_cast<double>(DurationSeconds) / Dt - 1e-4));
 	for (int32 Step = 0; Step < NumSteps; ++Step)
 	{
 		// Colour active during [t, t + dt): every event with time <= t (double time: no drift over 2400 steps).
-		// Key colours leave the motion alone; the move happens where the performer is at that time.
+		// Key colours leave the motion alone; the move happens where the performer is at that time and breaks a board
+		// of its colour it is within reach of.
 		const double T = static_cast<double>(Step) * Dt;
 		FHueRigSample Sample;
 		while (NextEvent < Sorted.Num() && Sorted[NextEvent].TimeSeconds <= T + 1e-6)
@@ -651,34 +806,62 @@ FHueMotionPrediction AReactiveRig::PredictMotion(const TArray<FHueColorEvent>& E
 			}
 			else
 			{
+				const float MoveFraction = X / TrackLength;
 				Sample.bKeyAction = true;
 				Sample.KeyActionColor = EventColor;
-				Sample.KeyActionFraction = X / TrackLength;
+				Sample.KeyActionFraction = MoveFraction;
+				for (FStageBoard& Board : Boards)
+				{
+					if (!bCrashedHere && !Board.bBroken && Board.Color == EventColor
+						&& MoveFraction >= Board.StrikeMin && MoveFraction <= Board.StrikeMax)
+					{
+						Board.bBroken = true;
+					}
+				}
 			}
 			++NextEvent;
 		}
 
-		// Semi-implicit Euler in the order Chaos integrates: velocity (force, then damping), clamp, position.
-		const float Acceleration = Color == EHueColor::A ? ColorAcceleration : (Color == EHueColor::B ? -ColorAcceleration : 0.f);
-		const float Damping = Color == EHueColor::N ? BrakeDamping : BaseDamping;
-		V += Acceleration * Dt;
-		V *= FMath::Max(0.f, 1.f - Damping * Dt);
-		if (MaxSpeed > 0.f)
+		if (bCrashedHere)
 		{
-			V = FMath::Clamp(V, -MaxSpeed, MaxSpeed);
+			V = 0.f; // down at the board: nothing moves any more
 		}
-		X += V * Dt;
+		else
+		{
+			// Semi-implicit Euler in the order Chaos integrates: velocity (force, then damping), clamp, position.
+			const float Acceleration = Color == EHueColor::A ? ColorAcceleration : (Color == EHueColor::B ? -ColorAcceleration : 0.f);
+			const float Damping = Color == EHueColor::N ? BrakeDamping : BaseDamping;
+			V += Acceleration * Dt;
+			V *= FMath::Max(0.f, 1.f - Damping * Dt);
+			if (MaxSpeed > 0.f)
+			{
+				V = FMath::Clamp(V, -MaxSpeed, MaxSpeed);
+			}
+			X += V * Dt;
 
-		// Inelastic end stops (restitution 0): the carriage stops dead against them.
-		if (X < MinCenter)
-		{
-			X = MinCenter;
-			V = FMath::Max(V, 0.f);
-		}
-		else if (X > MaxCenter)
-		{
-			X = MaxCenter;
-			V = FMath::Min(V, 0.f);
+			// Inelastic end stops (restitution 0): the carriage stops dead against them.
+			if (X < MinCenter)
+			{
+				X = MinCenter;
+				V = FMath::Max(V, 0.f);
+			}
+			else if (X > MaxCenter)
+			{
+				X = MaxCenter;
+				V = FMath::Min(V, 0.f);
+			}
+
+			// An unbroken board ahead stops the performer at its contact line for good (see CheckStageBoardContact).
+			for (const FStageBoard& Board : Boards)
+			{
+				if (!Board.bBroken && StartFraction < Board.ContactFraction && X / TrackLength >= Board.ContactFraction)
+				{
+					X = Board.ContactFraction * TrackLength;
+					V = 0.f;
+					bCrashedHere = true;
+					break;
+				}
+			}
 		}
 
 		const float Fraction = X / TrackLength;
@@ -687,6 +870,7 @@ FHueMotionPrediction AReactiveRig::PredictMotion(const TArray<FHueColorEvent>& E
 		Sample.TrackFraction = Fraction;
 		Sample.SpeedFraction = V / TrackLength;
 		Sample.ReceiverColor = Color;
+		Sample.bCrashed = bCrashedHere;
 		OnStep(Sample, Dt);
 	}
 
@@ -845,6 +1029,7 @@ void AReactiveRig::ClearSkinComponents()
 	MoveAnim = nullptr;
 	IdleAnim = nullptr;
 	KeyActionAnim = nullptr;
+	CrashAnim = nullptr;
 	bPlayingMoveAnim = false;
 	KeyActionTimeLeft = 0.f;
 }
@@ -955,6 +1140,7 @@ void AReactiveRig::ApplySkin()
 			MoveAnim = Skin->PerformerMoveAnim.IsNull() ? nullptr : Skin->PerformerMoveAnim.LoadSynchronous();
 			IdleAnim = Skin->PerformerIdleAnim.IsNull() ? nullptr : Skin->PerformerIdleAnim.LoadSynchronous();
 			KeyActionAnim = Skin->PerformerKeyActionAnim.IsNull() ? nullptr : Skin->PerformerKeyActionAnim.LoadSynchronous();
+			CrashAnim = Skin->PerformerCrashAnim.IsNull() ? nullptr : Skin->PerformerCrashAnim.LoadSynchronous();
 			Figure->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 			if (IdleAnim)
 			{
@@ -1017,6 +1203,11 @@ void AReactiveRig::ApplySkin()
 
 void AReactiveRig::UpdatePerformer(float DeltaSeconds)
 {
+	if (bCrashed)
+	{
+		return; // the fall plays out and holds its last pose until reset
+	}
+
 	// A key move plays out first (animation and letter); then the loop animation and labels follow the motion again.
 	if (KeyActionTimeLeft > 0.f)
 	{
@@ -1098,11 +1289,30 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 
 	ClearObjectiveMarkers();
 	ShownObjectives = Objectives;
+
+	// Stage boards are rules, not decoration: they exist (and block the performer) even where no marker can be built.
+	for (const FHueObjective& Objective : Objectives)
+	{
+		if (Objective.Type == EHueObjectiveType::BreakBoard)
+		{
+			FStageBoard Board;
+			Board.Color = Objective.Color;
+			Board.StrikeMin = FMath::Clamp(FMath::Min(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
+			Board.StrikeMax = FMath::Clamp(FMath::Max(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
+			Board.ContactFraction = FMath::Clamp(FMath::Max(Objective.TrackFraction, Board.StrikeMax), 0.f, 1.f);
+			StageBoards.Add(Board);
+		}
+	}
+	StageBoardMeshes.Init(nullptr, StageBoards.Num());
+	StageBoardLabels.Init(nullptr, StageBoards.Num());
+	StageBoardGlowMIDs.Init(nullptr, StageBoards.Num());
+
 	if (!GetWorld() || !APulseBlock::GetCubeMesh())
 	{
 		return;
 	}
 	const bool bSpotlight = ActiveSkin && ActiveSkin->bShowBackdrop && ActiveSkin->bZoneAsSpotlight;
+	int32 BoardIndex = 0;
 
 	for (const FHueObjective& Objective : Objectives)
 	{
@@ -1148,33 +1358,46 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 			}
 			break;
 		}
-		case EHueObjectiveType::KeyActionInZone:
+		case EHueObjectiveType::BreakBoard:
 		{
-			// The lock on the stage: a spotlight (or floor plate) in the key's colour, dim until the move happens in it.
-			const float ZoneMin = FMath::Clamp(FMath::Min(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
-			const float ZoneMax = FMath::Clamp(FMath::Max(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
-			const float Length = FMath::Max((ZoneMax - ZoneMin) * TrackLength, 1.f);
-			const float CenterX = (ZoneMin + ZoneMax) * 0.5f * TrackLength;
-			const FLinearColor LabelColor = HueColor::ToLinear(Objective.Color);
-			const FString Caption = FString::Printf(TEXT("%s MOVE HERE"), HueColor::Label(Objective.Color));
-			UStaticMeshComponent* Marker = nullptr;
+			// The lock on the stage: a panel in the key's colour standing on the track, and in front of it the strike
+			// zone as a spotlight (or floor plate) in that colour, dim until the board breaks.
+			const int32 Index = BoardIndex++;
+			const FStageBoard& Board = StageBoards[Index];
+
+			const FLinearColor KeyColor = HueColor::ToLinear(Objective.Color);
+			const float Length = FMath::Max((Board.StrikeMax - Board.StrikeMin) * TrackLength, 1.f);
+			const float CenterX = (Board.StrikeMin + Board.StrikeMax) * 0.5f * TrackLength;
+			const FString Caption = FString::Printf(TEXT("%s STRIKE ZONE"), HueColor::Label(Objective.Color));
+			UStaticMeshComponent* Glow = nullptr;
 			if (bSpotlight)
 			{
 				const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
-				Marker = AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
-					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), KeyZoneColor(Objective.Color, false),
+				Glow = AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
+					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), StrikeZoneColor(Objective.Color, false),
 					APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
-				AddMarkerLabel(Caption, FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), LabelColor);
+				AddMarkerLabel(Caption, FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), KeyColor);
 			}
 			else
 			{
-				Marker = AddMarkerMesh(FVector(CenterX, 0.f, ZonePlateZ),
-					FVector(Length / 100.f, ZonePlateWidth / 100.f, ZonePlateThickness / 100.f), KeyZoneColor(Objective.Color, false),
+				Glow = AddMarkerMesh(FVector(CenterX, 0.f, ZonePlateZ),
+					FVector(Length / 100.f, ZonePlateWidth / 100.f, ZonePlateThickness / 100.f), StrikeZoneColor(Objective.Color, false),
 					nullptr, /*bFlat*/ true);
-				AddMarkerLabel(Caption, FVector(CenterX, ZonePlateWidth * 0.5f + 2.f, 135.f), LabelColor);
+				AddMarkerLabel(Caption, FVector(CenterX, ZonePlateWidth * 0.5f + 2.f, 135.f), KeyColor);
 			}
-			KeyZones.Add(Objective);
-			KeyZoneMIDs.Add(Marker ? Cast<UMaterialInstanceDynamic>(Marker->GetMaterial(0)) : nullptr);
+
+			// The panel's near face is where the performer's front meets it: the carriage box's half length, or the front
+			// of a figure riding without the box.
+			const float FrontOffset = (ActiveSkin && !ActiveSkin->bShowCarriageBody) ? PerformerFrontOffset : CarriageHalfLength;
+			const float PanelX = Board.ContactFraction * TrackLength + FrontOffset + BoardThickness * 0.5f;
+			UStaticMeshComponent* Panel = AddMarkerMesh(FVector(PanelX, 0.f, TrackHeight + BoardHeight * 0.5f),
+				FVector(BoardThickness / 100.f, BoardDepth / 100.f, BoardHeight / 100.f), KeyColor * BoardGlow, nullptr, /*bFlat*/ true);
+			UTextRenderComponent* Letter = AddMarkerLabel(HueColor::Label(Objective.Color),
+				FVector(PanelX, BoardDepth * 0.5f + 1.f, TrackHeight + BoardHeight * 0.6f), FLinearColor(0.02f, 0.02f, 0.02f), BoardLetterSize);
+
+			StageBoardMeshes[Index] = Panel;
+			StageBoardLabels[Index] = Letter;
+			StageBoardGlowMIDs[Index] = Glow ? Cast<UMaterialInstanceDynamic>(Glow->GetMaterial(0)) : nullptr;
 			break;
 		}
 		case EHueObjectiveType::ReceiverColor:
@@ -1194,8 +1417,10 @@ void AReactiveRig::ClearObjectiveMarkers()
 		}
 	}
 	MarkerComponents.Reset();
-	KeyZoneMIDs.Reset();
-	KeyZones.Reset();
+	StageBoards.Reset();
+	StageBoardMeshes.Reset();
+	StageBoardLabels.Reset();
+	StageBoardGlowMIDs.Reset();
 
 	for (UTextRenderComponent* Label : MarkerLabels)
 	{
@@ -1208,7 +1433,7 @@ void AReactiveRig::ClearObjectiveMarkers()
 }
 
 UStaticMeshComponent* AReactiveRig::AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color,
-	UStaticMesh* Mesh, bool bFlat, const FRotator& RelativeRotation)
+	UStaticMesh* Mesh, bool bFlat, const FRotator& RelativeRotation, TArray<TObjectPtr<UStaticMeshComponent>>* OwnerList)
 {
 	// Runtime component: outer = this actor, attached + registered, owned through the MarkerComponents UPROPERTY.
 	UStaticMeshComponent* Marker = NewObject<UStaticMeshComponent>(this);
@@ -1232,17 +1457,18 @@ UStaticMeshComponent* AReactiveRig::AddMarkerMesh(const FVector& RelativeLocatio
 	{
 		HueRigPrivate::TintComponent(Marker, Color);
 	}
-	MarkerComponents.Add(Marker);
+	(OwnerList ? *OwnerList : MarkerComponents).Add(Marker);
 	return Marker;
 }
 
-void AReactiveRig::AddMarkerLabel(const FString& Text, const FVector& RelativeLocation, const FLinearColor& Color)
+UTextRenderComponent* AReactiveRig::AddMarkerLabel(const FString& Text, const FVector& RelativeLocation, const FLinearColor& Color, float WorldSize)
 {
 	UTextRenderComponent* Label = NewObject<UTextRenderComponent>(this);
 	Label->SetupAttachment(SceneRoot);
-	HueRigPrivate::SetupText(Label, 18.f, Color.ToFColor(true));
+	HueRigPrivate::SetupText(Label, WorldSize, Color.ToFColor(true));
 	Label->SetRelativeLocation(RelativeLocation);
 	Label->SetText(FText::FromString(Text));
 	Label->RegisterComponent();
 	MarkerLabels.Add(Label);
+	return Label;
 }

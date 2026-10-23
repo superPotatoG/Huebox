@@ -73,6 +73,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
 	TSoftObjectPtr<UAnimSequence> PerformerKeyActionAnim;
 
+	/** Played once and held when the performer runs into an unbroken stage board (falling backwards). Empty: the
+	 *  performer just stops at the board. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
+	TSoftObjectPtr<UAnimSequence> PerformerCrashAnim;
+
 	/** Uniform scale of the performer mesh (the mannequin is ~180 cm tall). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
 	float PerformerScale = 0.45f;

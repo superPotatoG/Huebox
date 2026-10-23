@@ -83,9 +83,11 @@ namespace HueTutorialPrivate
 		return Spec;
 	}
 
-	FHueBlockSpec MakeBrick(int32 X, int32 Y)
+	FHueBlockSpec MakeBrick(int32 X, int32 Y, EHueColor Color)
 	{
-		return MakeBlock(EHueBlockKind::Brick, X, Y);
+		FHueBlockSpec Spec = MakeBlock(EHueBlockKind::Brick, X, Y);
+		Spec.BrickColor = Color;
+		return Spec;
 	}
 
 	FHuePickupSpec MakePickup(EHueModuleType Type, int32 Count, float LocalX, float LocalY)
@@ -390,22 +392,23 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	}
 
 	// ---- Exercise 4: colour key ----------------------------------------------------------------------------------
-	// The yellow move in the yellow spotlight: a key colour does nothing to the motion, it makes the dancer do her move
-	// where she is - and the spotlight only counts it while she runs through it. Three steps, each from an earlier idea:
-	// open the brick with a spare light (routing, ex 1), make Y = A + G (mixing, ex 3), time it to her pass (delay).
+	// Colour is a key, locks have a colour: a blue brick on the grid, a yellow board on the stage. A key colour does
+	// nothing to the motion; Y makes the dancer do her move where she is, and the board only breaks for a move made
+	// within reach of it - too early she misses, too late she runs into it and the attempt fails. Three steps, each from
+	// an earlier idea: open the brick with the spare B (routing, ex 1), make Y = A + G (mixing, ex 3), time it (delay).
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(3,
 			TEXT("4 · Colour Key"),
-			TEXT("When yellow light (Y) reaches the dancer she does her yellow move - it counts only inside the yellow ")
-			TEXT("spotlight, which she runs through. {Supply}. 1) A brick blocks the push: any light breaks it but is used ")
-			TEXT("up, so open it first with the spare B. 2) Light adds up: A + G = Y - mix where they meet. 3) Delay the Y ")
-			TEXT("until she is in the spotlight.")));
+			TEXT("A yellow board stands on the dancer's track. When yellow light (Y) reaches her she does her yellow move, ")
+			TEXT("which breaks the board from the yellow strike zone in front of it - too early she misses, too late she runs ")
+			TEXT("into it. {Supply}. 1) BRICK B blocks the push and only B breaks it: turn the spare B into it. 2) Light adds ")
+			TEXT("up: A + G = Y - mix where they meet. 3) Delay the Y until she is in the strike zone.")));
 
 		Layout.Blocks = {
 			// The push: A along row 3 reaches K(3,3) at 0.75 s and R(4,3) (West face) at 1.00 s once K is open. Shipped,
-			// the push itself breaks K and is used up: the dancer never starts.
+			// the blue brick blocks it: the dancer never starts.
 			MakeSource(0, 3, EHueDir::East, EHueColor::A),
-			MakeBrick(3, 3),
+			MakeBrick(3, 3, EHueColor::B),
 			MakeReceiver(4, 3, { EHueDir::West, EHueDir::South }),
 			// The spare: B travelling West along row 4 past (3,4) at 0.25 s and off the board - unless a turn there
 			// sends it South into K (0.50 s, before the push).
@@ -422,22 +425,25 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakePickup(EHueModuleType::Delay, 1, 420.f, 720.f),
 		};
 
-		FHueObjective YellowMove = MakeObjective(EHueObjectiveType::KeyActionInZone, TEXT("The yellow move in the yellow spotlight"));
-		YellowMove.Color = EHueColor::Y;
-		// Centred between the 0.25 s delay steps both in the prediction (0.555 / 0.63) and in real physics, which runs
-		// ~0.015 ahead (0.57 / 0.645): the neighbours 2.00 s / 2.75 s stay >= 0.025 outside either way.
-		YellowMove.ZoneMin = 0.52f;
-		YellowMove.ZoneMax = 0.68f;
-		Layout.Objectives = { YellowMove };
+		FHueObjective YellowBoard = MakeObjective(EHueObjectiveType::BreakBoard, TEXT("Break the yellow board"));
+		YellowBoard.Color = EHueColor::Y;
+		// The strike has to land on the board, so the zone sits right in front of it: the hit lands ~0.25 s after the move
+		// starts, ~0.075 of the track further on (cruise 3 m/s), and the board is 0.06 past the zone's end. One delay step
+		// moves the dancer 0.075, so the zone holds exactly one step: 2.50 s, centred in the prediction (0.63) and in real
+		// physics, which runs ~0.015 ahead (0.645); the neighbours 2.25 s / 2.75 s stay >= 0.025 outside either way.
+		YellowBoard.ZoneMin = 0.60f;
+		YellowBoard.ZoneMax = 0.68f;
+		YellowBoard.TrackFraction = 0.74f;
+		Layout.Objectives = { YellowBoard };
 
 		// T(3,4) South [S+E]: the spare B turns South and breaks K at 0.50 s; the push passes at 0.75 s, R turns A at
 		// 1.00 s and the dancer runs (cruise 3 m/s = 0.075 of the track per 0.25 s). M(4,1) North: Y leaves at 0.50 s,
-		// D(4,2) North holds it, R gets it at 1.00 s + delay. Delay 2.25 s -> move at ~0.555, 2.50 s -> ~0.63 (both in the
-		// spotlight); 2.00 s (~0.48) is too early, 2.75 s (~0.705) too late.
+		// D(4,2) North holds it, R gets it at 1.00 s + delay. Delay 2.50 s -> move at ~0.63, in the strike zone; 2.25 s
+		// (~0.555) misses and she runs into the board, 2.75 s (~0.705) is too late.
 		Layout.SolutionBlocks = {
 			MakeBlock(EHueBlockKind::Turn, 3, 4, EHueDir::South, true),
 			MakeBlock(EHueBlockKind::Mixer, 4, 1, EHueDir::North, true),
-			MakeDelay(4, 2, EHueDir::North, 2.25f, true),
+			MakeDelay(4, 2, EHueDir::North, 2.5f, true),
 		};
 	}
 }
@@ -504,6 +510,10 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	else if (AHueDelayBlock* DelayBlock = Cast<AHueDelayBlock>(Block))
 	{
 		DelayBlock->SetDelaySeconds(Spec.DelaySeconds);
+	}
+	else if (AHueBrickBlock* Brick = Cast<AHueBrickBlock>(Block))
+	{
+		Brick->SetBrickColor(Spec.BrickColor);
 	}
 	else if (AHueReceiverBlock* ReceiverBlock = Cast<AHueReceiverBlock>(Block))
 	{

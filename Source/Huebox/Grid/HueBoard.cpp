@@ -656,17 +656,22 @@ void AHueBoard::TickObjectives(float DeltaSeconds)
 			Rig->ClearKeyAction();
 		}
 		const FHueObjective* Waiting = Objectives.IsValidIndex(Before) ? &Objectives[Before] : nullptr;
-		const bool bCounted = CurrentObjective > Before && Waiting && Waiting->Type == EHueObjectiveType::KeyActionInZone;
-		FString Message = FString::Printf(TEXT("%s: %s move at %.0f%% of the track"),
-			IsValid(Rig) ? *Rig->GetPerformerName() : TEXT("Performer"), HueColor::Label(Sample.KeyActionColor),
-			Sample.KeyActionFraction * 100.f);
+		const bool bForBoard = Waiting && Waiting->Type == EHueObjectiveType::BreakBoard && Waiting->Color == Sample.KeyActionColor;
+		const bool bCounted = bForBoard && CurrentObjective > Before;
+		const FString Performer = IsValid(Rig) ? Rig->GetPerformerName() : FString(TEXT("Performer"));
+		FString Message = FString::Printf(TEXT("%s: %s move at %.0f%% of the track"), *Performer,
+			HueColor::Label(Sample.KeyActionColor), Sample.KeyActionFraction * 100.f);
 		EHueFeedbackKind Kind = EHueFeedbackKind::Info;
-		if (!bCounted && Waiting && Waiting->Type == EHueObjectiveType::KeyActionInZone && Waiting->Color == Sample.KeyActionColor)
+		if (bCounted)
+		{
+			Message += FString::Printf(TEXT(" - the %s board breaks"), HueColor::Name(Waiting->Color));
+		}
+		else if (bForBoard && !Sample.bCrashed)
 		{
 			Kind = EHueFeedbackKind::Warning;
-			Message += FString::Printf(TEXT(" - %s, the %s spotlight is %.0f-%.0f%%"),
-				Sample.KeyActionFraction < Waiting->ZoneMin ? TEXT("too early") : TEXT("too late"),
-				HueColor::Name(Waiting->Color), Waiting->ZoneMin * 100.f, Waiting->ZoneMax * 100.f);
+			Message += FString::Printf(TEXT(" - %s: the strike zone is %.0f-%.0f%%"),
+				Sample.KeyActionFraction < Waiting->ZoneMin ? TEXT("too early, out of reach") : TEXT("too late"),
+				Waiting->ZoneMin * 100.f, Waiting->ZoneMax * 100.f);
 		}
 		if (AExhibitManager* Manager = AExhibitManager::Get(this))
 		{
@@ -736,9 +741,10 @@ bool AHueBoard::EvaluateObjectives(const FHueRigSample& Sample, float DeltaSecon
 		break;
 	}
 
-	case EHueObjectiveType::KeyActionInZone:
-		// Where the move happened counts, not where the performer is by the time the board samples it.
-		bDone = Sample.bKeyAction && Sample.KeyActionColor == Objective.Color
+	case EHueObjectiveType::BreakBoard:
+		// The board breaks for a move of its colour made from the strike zone (where the move happened counts, not
+		// where the performer is when the board samples); once she has run into it nothing breaks it any more.
+		bDone = Sample.bKeyAction && !Sample.bCrashed && Sample.KeyActionColor == Objective.Color
 			&& Sample.KeyActionFraction >= Objective.ZoneMin && Sample.KeyActionFraction <= Objective.ZoneMax;
 		break;
 

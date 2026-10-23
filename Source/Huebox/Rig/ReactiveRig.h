@@ -49,12 +49,18 @@ public:
 
 	/**
 	 * Receiver output for a key colour (not A / B / N): the performer does that colour's move right where it is (the
-	 * skin's key-action animation); the motion is not affected. A key zone of the same colour that the performer is
-	 * inside lights up. The move is reported in the next MakeSample until ClearKeyAction.
+	 * skin's key-action animation); the motion is not affected. An unbroken stage board of that colour breaks if the
+	 * performer is in its strike zone; otherwise the move misses (a mark stays on the track where it happened). The
+	 * move is reported in the next MakeSample until ClearKeyAction.
 	 */
 	void PerformKeyAction(EHueColor KeyColor);
 	/** Forget the move reported by MakeSample (the board calls it after evaluating its objectives). */
 	void ClearKeyAction() { bKeyActionPending = false; }
+
+	/** The performer ran into an unbroken stage board: stopped at it, falling (the attempt has failed). Until reset. */
+	bool HasCrashed() const { return bCrashed; }
+	/** Colour of the board it ran into (valid while HasCrashed). */
+	EHueColor GetCrashBoardColor() const { return CrashBoardColor; }
 
 	/** Physics on/off. Run start -> true. Pause stores the velocity and freezes; resume restores it. */
 	void SetMotionActive(bool bActive);
@@ -77,7 +83,8 @@ public:
 	/** World location of the moving performer (the physics body), e.g. for the side camera to follow. */
 	FVector GetPerformerLocation() const;
 
-	/** Shows marker posts for the objectives (far marker, return marker, target zone). */
+	/** Shows marker posts for the objectives (far marker, return marker, target zone) and builds the stage boards of
+	 *  the BreakBoard objectives (these block the performer until broken). */
 	void ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives);
 
 	// ---- Skin (presentation only; physics is identical for every skin) ----------------------------------------
@@ -95,8 +102,10 @@ public:
 	 * Fixed-step integration of the same model the physics uses (acceleration, speed cap, Chaos-style linear
 	 * damping v *= max(0, 1 - c*dt), inelastic end stops). Starts at CarriageStartFraction with colour N at rest;
 	 * Events (sorted by time, seconds since run start) change the colour; key-colour events change nothing and show up
-	 * as a key action (bKeyAction, position at the event time) in the sample of the step they fall in. OnStep receives
-	 * a sample after every step (ReceiverColor = colour active during that step) and the step length.
+	 * as a key action (bKeyAction, position at the event time) in the sample of the step they fall in. Stage boards
+	 * behave as in play: a key move in a board's strike zone breaks it, reaching an unbroken one stops the performer for
+	 * good (bCrashed). OnStep receives a sample after every step (ReceiverColor = colour active during that step) and the
+	 * step length.
 	 * Pure function of the tuning values; used by automation tests to validate the tutorial timings.
 	 */
 	FHueMotionPrediction PredictMotion(const TArray<FHueColorEvent>& Events, float DurationSeconds, float StepSeconds,
@@ -219,6 +228,10 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimSequence> KeyActionAnim;
 
+	/** Played once (held on its last pose) when the performer runs into an unbroken stage board. */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequence> CrashAnim;
+
 	/** +1 = performer faces away from the anchor, -1 = towards it. */
 	float FacingSign = -1.f;
 	bool bPlayingMoveAnim = false;
@@ -232,11 +245,36 @@ protected:
 	EHueColor PendingKeyColor = EHueColor::N;
 	float PendingKeyFraction = 0.f;
 
-	/** Spotlights / plates of the KeyActionInZone objectives: their material (lit up once the move happened inside)
-	 *  and the zone they stand for. Parallel arrays; the MIDs are also held by the marker components. */
+	/** A breakable board on the stage, from a BreakBoard objective. Plain data; its components sit at the same index
+	 *  of StageBoardMeshes / StageBoardGlowMIDs. */
+	struct FStageBoard
+	{
+		EHueColor Color = EHueColor::Y;
+		/** Track fraction of the performer's centre when it touches the board. */
+		float ContactFraction = 1.f;
+		float StrikeMin = 0.f;
+		float StrikeMax = 0.f;
+		bool bBroken = false;
+		/** Seconds until the panel disappears after a hit (the move's hit lands a moment after it starts); < 0 = none. */
+		float HideTimeLeft = -1.f;
+	};
+	TArray<FStageBoard> StageBoards;
+
+	/** The board panels (hidden once broken) and the glow of their strike zones (lit when broken). Also held by the
+	 *  marker arrays; these UPROPERTY lists just keep the per-board handles. */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UMaterialInstanceDynamic>> KeyZoneMIDs;
-	TArray<FHueObjective> KeyZones;
+	TArray<TObjectPtr<UStaticMeshComponent>> StageBoardMeshes;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTextRenderComponent>> StageBoardLabels;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> StageBoardGlowMIDs;
+
+	/** Marks on the track where key moves happened this attempt (removed on reset). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> MoveMarks;
+
+	bool bCrashed = false;
+	EHueColor CrashBoardColor = EHueColor::Y;
 
 	EHueColor CurrentColor = EHueColor::N;
 	bool bMotionActive = false;
@@ -250,8 +288,10 @@ private:
 	/** Restores the carriage under the rig root (simulation detaches it) and teleports it to the start. */
 	void PlaceCarriageAtStart();
 	void ClearObjectiveMarkers();
+	/** Runtime marker component; owned through MarkerComponents (objective markers) or OwnerList (e.g. MoveMarks). */
 	UStaticMeshComponent* AddMarkerMesh(const FVector& RelativeLocation, const FVector& RelativeScale, const FLinearColor& Color,
-		UStaticMesh* Mesh = nullptr, bool bFlat = false, const FRotator& RelativeRotation = FRotator::ZeroRotator);
+		UStaticMesh* Mesh = nullptr, bool bFlat = false, const FRotator& RelativeRotation = FRotator::ZeroRotator,
+		TArray<TObjectPtr<UStaticMeshComponent>>* OwnerList = nullptr);
 
 	void ApplySkin();
 	void ClearSkinComponents();
@@ -259,12 +299,18 @@ private:
 	void UpdatePerformer(float DeltaSeconds);
 	/** Back to the loop animation that fits the current speed (after a key move, on reset). */
 	void ResumeLoopAnimation();
-	/** Key-zone marker colour: dim while waiting, bright once the move happened inside. */
-	FLinearColor KeyZoneColor(EHueColor KeyColor, bool bLit) const;
-	void SetKeyZonesLit(bool bLit);
+	/** Strike-zone glow colour: dim while the board stands, bright once it broke. */
+	FLinearColor StrikeZoneColor(EHueColor KeyColor, bool bLit) const;
+	/** Every board back up, panels visible, zones dim (reset). */
+	void RestoreStageBoards();
+	/** Hides the panels whose hit delay ran out. */
+	void UpdateStageBoards(float DeltaSeconds);
+	/** Stops the performer at an unbroken board it reached this frame, if any (physics side of the crash). */
+	void CheckStageBoardContact();
+	void ClearMoveMarks();
 	/** Unlit flat-colour material instance (M_HueUnlit, falls back to the basic shape material). */
 	UMaterialInstanceDynamic* MakeFlatMID(UObject* Outer, const FLinearColor& Color) const;
 	/** Objectives last shown, so a skin change can rebuild the markers in the new style. */
 	TArray<FHueObjective> ShownObjectives;
-	void AddMarkerLabel(const FString& Text, const FVector& RelativeLocation, const FLinearColor& Color);
+	UTextRenderComponent* AddMarkerLabel(const FString& Text, const FVector& RelativeLocation, const FLinearColor& Color, float WorldSize = 18.f);
 };

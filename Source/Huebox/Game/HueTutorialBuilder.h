@@ -21,7 +21,7 @@ enum class EHueBlockKind : uint8
 	ColorShift,
 	Delay,
 	Mixer,
-	/** Fixed brick that any light breaks, using that pulse up (AHueBrickBlock). */
+	/** Fixed lock that only BrickColor breaks, using that pulse up (AHueBrickBlock). */
 	Brick
 };
 
@@ -55,6 +55,10 @@ struct FHueBlockSpec
 	/** Receiver only: faces through which pulses may enter. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	TArray<EHueDir> ReceiverFaces;
+
+	/** Brick only: the one colour that breaks it. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
+	EHueColor BrickColor = EHueColor::B;
 };
 
 /** A stack of modules lying next to the board (the exercise's supply tray). */
@@ -122,7 +126,7 @@ struct FHueBoardLayout
 
 /**
  * Builds the Level 1 "prototype table" at BeginPlay from data: four exercise boards (GDD 4: route a signal,
- * change motion, synthesize a stop; plus the colour key: open a brick, mix a Y and time it to the yellow spotlight), their rigs, their module supply (Instruction mode: the board's tray; Sandbox mode:
+ * change motion, synthesize a stop; plus the colour key: open a blue brick, mix a Y and time it to break the yellow board on stage), their rigs, their module supply (Instruction mode: the board's tray; Sandbox mode:
  * floor pickups), titles, and - if the level has none - a ground slab and lights. Layouts are plain USTRUCT data so
  * designers can edit them in the details panel.
  */

@@ -39,9 +39,6 @@ namespace HueHUD
 	static const FLinearColor TileInk(0.08f, 0.08f, 0.08f);
 	static const FLinearColor BarrierFill(0.03f, 0.03f, 0.035f);
 	static const FLinearColor BarrierEdge(0.42f, 0.42f, 0.42f);
-	/** Brick tile, as on the board (HueFixedBlocks.cpp). */
-	static const FLinearColor BrickFill(0.55f, 0.42f, 0.32f);
-	static const FLinearColor BrickBrokenFill(0.12f, 0.1f, 0.08f);
 	static const FLinearColor MapFloor(0.17f, 0.15f, 0.13f, 0.92f);
 	static const FLinearColor MapLine(0.36f, 0.33f, 0.3f, 0.9f);
 
@@ -342,14 +339,15 @@ namespace HueHUD
 		}
 		else if (const AHueBrickBlock* Brick = Cast<AHueBrickBlock>(&Block))
 		{
-			// Standing: a stone tile marked "#". Broken: a dark, empty tile (the way is open).
+			// Standing: a tile in the brick's colour marked "#" (a source of that colour shows "S"). Broken: dimmed, empty.
+			const FLinearColor BrickColor = HueColor::ToLinear(Brick->GetBrickColor());
 			if (Brick->IsBroken())
 			{
-				Tile.Fill = BrickBrokenFill;
+				Tile.Fill = FLinearColor(BrickColor.R * 0.3f, BrickColor.G * 0.3f, BrickColor.B * 0.3f, 1.f);
 			}
 			else
 			{
-				Tile.Fill = BrickFill;
+				Tile.Fill = BrickColor;
 				Tile.Letter = TEXT("#");
 			}
 		}
@@ -850,9 +848,10 @@ void AHueboxHUD::DrawBoardPanel(const APawn* Pawn, AExhibitManager* Manager, EHu
 				{
 					Text += FString::Printf(TEXT(" (hold %.1f/%.1f s)"), Board->GetHoldProgress(), Objective.HoldSeconds);
 				}
-				else if (Objective.Type == EHueObjectiveType::KeyActionInZone)
+				else if (Objective.Type == EHueObjectiveType::BreakBoard)
 				{
-					Text += FString::Printf(TEXT(" (%.0f-%.0f%% of the track)"), Objective.ZoneMin * 100.f, Objective.ZoneMax * 100.f);
+					Text += FString::Printf(TEXT(" (%s from %.0f-%.0f%%, board at %.0f%%)"), HueColor::Label(Objective.Color),
+						Objective.ZoneMin * 100.f, Objective.ZoneMax * 100.f, Objective.TrackFraction * 100.f);
 				}
 				HueHUD::AddWrapped(*this, Lines, Text, HueHUD::AmberColor, ContentWidth, S);
 			}
@@ -1556,6 +1555,10 @@ void AHueboxHUD::DrawRunBanner(const AExhibitManager* Manager)
 	else
 	{
 		HueHUD::AddLine(Lines, TEXT("Run ended"), HueHUD::BadColor, true);
+		if (!Manager->GetEndReason().IsEmpty())
+		{
+			HueHUD::AddLine(Lines, Manager->GetEndReason(), HueHUD::BadColor);
+		}
 		HueHUD::AddLine(Lines, TEXT("R  back to build and adjust    Space  run again    Tab  next exercise"), HueHUD::TextColor);
 	}
 

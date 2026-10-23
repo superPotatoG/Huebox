@@ -18,7 +18,7 @@
 |---|---|---|
 | 基本 | `DisplayName`、`PerformerName` | 列表里显示的名字；HUD 上的称呼，比如 "Dancer" |
 | Rig parts | `bShowCarriageBody`、`bShowAnchorBlock`、`StructureColor`、`bLettersInSignalColor` | 是否显示小车方块和锚点方块；轨道和挡块的颜色；A/B/N 字母是否用信号颜色 |
-| Performer | `PerformerMesh`、`PerformerMoveAnim`、`PerformerIdleAnim`、`PerformerKeyActionAnim`、`PerformerScale`、`bFaceMotionDirection`、`bFlatPerformerColor`、`PerformerColor` | 舞者的骨骼网格、移动动画（播放速度随移动速度变化）、待机动画、**钥匙动作**（黄光等钥匙颜色到达时播放一次，例如舞步、出拳、剑术；留空则只在舞者身上闪出颜色字母）、大小、是否转身面向运动方向、是否涂成纯色（剪影） |
+| Performer | `PerformerMesh`、`PerformerMoveAnim`、`PerformerIdleAnim`、`PerformerKeyActionAnim`、`PerformerCrashAnim`、`PerformerScale`、`bFaceMotionDirection`、`bFlatPerformerColor`、`PerformerColor` | 舞者的骨骼网格、移动动画（播放速度随移动速度变化）、待机动画、**钥匙动作**（黄光等钥匙颜色到达时播放一次，例如舞步、出拳、剑术；留空则只在舞者身上闪出颜色字母）、**撞板倒地动作**（撞上没打碎的板子时播放一次并停在最后一帧；留空则只是停住）、大小、是否转身面向运动方向、是否涂成纯色（剪影） |
 | Partner | `bShowPartner`、`PartnerMesh`、`PartnerAnim` | 锚点处的舞伴 |
 | Backdrop | `bShowBackdrop`、`BackdropColor`、`BackdropSignalTint`、`BackdropHeight`、`bZoneAsSpotlight`、`SpotlightColor`、`FlatMaterial` | 背光纸屏的亮度和颜色、信号染色程度、高度；停止区是否画成聚光灯；纯色部件使用的材质 |
 

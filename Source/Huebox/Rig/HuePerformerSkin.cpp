@@ -11,6 +11,8 @@ namespace HueSkinPrivate
 	const TCHAR* const IdlePath = TEXT("/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle.MM_Idle");
 	/** Placeholder key move from the template (a strike); a dance step can replace it later. */
 	const TCHAR* const KeyActionPath = TEXT("/Game/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.MM_Attack_01");
+	/** Placeholder fall from the template: she runs into the board and falls backwards ("hit from the front"). */
+	const TCHAR* const CrashPath = TEXT("/Game/Characters/Mannequins/Anims/Death/MM_Death_Front_01.MM_Death_Front_01");
 }
 
 UHuePerformerSkin::UHuePerformerSkin()
@@ -34,6 +36,7 @@ UHueSkin_Silhouette::UHueSkin_Silhouette()
 	PerformerMoveAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(JogPath));
 	PerformerIdleAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(IdlePath));
 	PerformerKeyActionAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(KeyActionPath));
+	PerformerCrashAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(CrashPath));
 	PerformerScale = 0.7f;
 	bFaceMotionDirection = true;
 	bFlatPerformerColor = true;

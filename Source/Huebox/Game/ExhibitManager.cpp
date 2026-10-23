@@ -15,6 +15,7 @@
 #include "TimerManager.h"
 
 #include "Blocks/HueFixedBlocks.h"
+#include "Blocks/HueModuleBlocks.h"
 #include "Game/HueboxGameMode.h"
 #include "Game/HueTutorialBuilder.h"
 #include "Grid/HueBoard.h"
@@ -126,8 +127,9 @@ void AExhibitManager::BeginPlay()
 			HueExhibitPrivate::SelfTestStartDelaySeconds, false);
 	}
 
-	// Visual check: -HueShot=<file.png> [-HueShotBoard=N] [-HueShotRun=<s>] frames a board, optionally installs its
-	// baseline solution and runs it for <s> seconds, saves a screenshot and quits. Use with -RenderOffscreen.
+	// Visual check: -HueShot=<file.png> [-HueShotBoard=N] [-HueShotRun=<s>] [-HueShotDelay=<s>] frames a board,
+	// optionally installs its baseline solution (delays overridden) and runs it for <s> seconds, saves a screenshot and
+	// quits. Use with -RenderOffscreen.
 	if (FParse::Value(FCommandLine::Get(), TEXT("HueShot="), ShotPath))
 	{
 		GetWorldTimerManager().SetTimer(ShotTimer, this, &AExhibitManager::PrepareVisualCheck, 1.5f, false);
@@ -165,6 +167,18 @@ void AExhibitManager::PrepareVisualCheck()
 		if (const FHueBoardLayout* Layout = Builder ? Builder->FindLayoutForBoard(Board) : nullptr)
 		{
 			AHueTutorialBuilder::InstallSolution(Board, *Layout);
+		}
+		// -HueShotDelay=<s>: every delay of the board set to <s> (shows a mistimed attempt, e.g. a missed board).
+		float ShotDelay = -1.f;
+		if (FParse::Value(FCommandLine::Get(), TEXT("HueShotDelay="), ShotDelay))
+		{
+			Board->ForEachBlock([ShotDelay](APulseBlock& Block)
+			{
+				if (AHueDelayBlock* Delay = Cast<AHueDelayBlock>(&Block))
+				{
+					Delay->SetDelaySeconds(ShotDelay);
+				}
+			});
 		}
 		StartRun(Board);
 	}
@@ -244,9 +258,16 @@ void AExhibitManager::Tick(float DeltaSeconds)
 		RunClockSeconds += Step;
 
 		Board->TickObjectives(Step);
+		const AReactiveRig* Rig = Board->GetRig();
 		if (Board->AreObjectivesComplete())
 		{
 			HandleRunComplete();
+		}
+		else if (IsValid(Rig) && Rig->HasCrashed())
+		{
+			// Running into an unbroken stage board fails the attempt at once (no waiting for the time limit).
+			HandleRunFailed(FString::Printf(TEXT("The %s ran into the %s board before breaking it"),
+				*Rig->GetPerformerName().ToLower(), HueColor::Name(Rig->GetCrashBoardColor())));
 		}
 		else if (GetRunTimeSeconds() >= Board->RunTimeLimitSeconds)
 		{
@@ -574,6 +595,7 @@ void AExhibitManager::ResetAttemptInternal(bool bQuiet)
 	ActiveBoard = nullptr;
 	RunClockSeconds = 0.0;
 	FrozenRunTimeSeconds = 0.0;
+	EndReason.Reset();
 	SetState(EHueRunState::Build);
 
 	if (!bQuiet && bHadAttempt)
@@ -639,11 +661,34 @@ void AExhibitManager::HandleRunTimeout()
 		Rig->FreezeMotion();
 	}
 
+	EndReason = FString::Printf(TEXT("Time limit (%s s) reached"), *HueExhibitPrivate::FormatSeconds(LimitSeconds));
 	PushFeedback(EHueFeedbackKind::Error,
-		FString::Printf(TEXT("Time limit (%s s) reached - %s stopped at %d%% of the track. Press R to reset."),
-			*HueExhibitPrivate::FormatSeconds(LimitSeconds), IsValid(Rig) ? *Rig->GetPerformerName().ToLower() : TEXT("carriage"),
+		FString::Printf(TEXT("%s - %s stopped at %d%% of the track. Press R to reset."),
+			*EndReason, IsValid(Rig) ? *Rig->GetPerformerName().ToLower() : TEXT("carriage"),
 			FMath::RoundToInt(Fraction * 100.f)),
 		Board);
+}
+
+void AExhibitManager::HandleRunFailed(const FString& Reason)
+{
+	AHueBoard* Board = ActiveBoard;
+	AReactiveRig* Rig = IsValid(Board) ? Board->GetRig() : nullptr;
+
+	FrozenRunTimeSeconds = GetRunTimeSeconds();
+	EndReason = Reason;
+	SetState(EHueRunState::Ended);
+
+	if (UPulseSubsystem* PulseSim = Sim.Get())
+	{
+		PulseSim->StopAndClear();
+	}
+	if (IsValid(Rig))
+	{
+		// Kept visible (not reset): the performer lies where the attempt failed.
+		Rig->FreezeMotion();
+	}
+
+	PushFeedback(EHueFeedbackKind::Error, FString::Printf(TEXT("%s. Press R to reset."), *Reason), Board);
 }
 
 // ---- Feedback -------------------------------------------------------------------------------------------------
@@ -798,7 +843,7 @@ void AExhibitManager::TickSelfTest(float /*DeltaSeconds*/)
 		break;
 
 	case EHueRunState::Ended:
-		FinishSelfTestBoard(false, TEXT("time limit reached before all objectives were met"));
+		FinishSelfTestBoard(false, EndReason.IsEmpty() ? FString(TEXT("the run ended before all objectives were met")) : EndReason);
 		StartNextSelfTestBoard();
 		break;
 

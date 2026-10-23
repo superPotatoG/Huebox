@@ -35,9 +35,10 @@ protected:
 };
 
 /**
- * Receiving port of the reactive mechanism. Accepts pulses through AcceptFaces only. All pulses that arrive at
- * the same logical time are grouped: if they disagree in colour the state is unchanged and a conflict is shown,
- * otherwise the colour is applied to the linked rig. Never emits another pulse.
+ * Receiving port of the reactive mechanism. Accepts pulses through AcceptFaces only. All motion pulses (A / B / N)
+ * that arrive at the same logical time are grouped: if they disagree in colour the state is unchanged and a conflict
+ * is shown, otherwise the colour is applied to the linked rig. Key colours (G, Y, ...) never join that group: each
+ * one makes the rig's performer do its move (AReactiveRig::PerformKeyAction). Never emits another pulse.
  */
 UCLASS()
 class HUEBOX_API AHueReceiverBlock : public APulseBlock
@@ -64,7 +65,8 @@ public:
 	/** Colour currently held (N after reset). */
 	EHueColor GetCurrentColor() const { return CurrentColor; }
 
-	/** Every colour actually applied to the rig during this attempt (logical seconds). Cleared on reset. */
+	/** Every colour actually delivered to the rig during this attempt (logical seconds): applied motion colours and
+	 *  key moves, in delivery order. Cleared on reset. */
 	const TArray<FHueColorEvent>& GetAppliedHistory() const { return AppliedHistory; }
 	/** Number of conflicts (different colours at the same logical time) during this attempt. */
 	int32 GetConflictCount() const { return ConflictCount; }
@@ -83,9 +85,16 @@ protected:
 
 	EHueColor CurrentColor = EHueColor::N;
 
-	/** Colours received during the current logical time step. */
+	/** Motion colours received during the current logical time step. */
 	TArray<EHueColor, TInlineAllocator<4>> PendingColors;
+	/** Key colours received during the current logical time step (each delivered once). */
+	TArray<EHueColor, TInlineAllocator<2>> PendingKeyColors;
 	int64 PendingTimeMs = 0;
+
+	/** Applies the instant's motion colour (or reports the conflict). */
+	void ResolveMotionGroup(UPulseSubsystem& Sim);
+	/** Hands the instant's key colours to the rig as moves. */
+	void DeliverKeyColors(UPulseSubsystem& Sim);
 
 	/** Entry face of the latest accepted pulse (where the conflict flash is drawn). */
 	EHueDir LastEntryFace = EHueDir::West;
@@ -109,17 +118,17 @@ public:
 };
 
 /**
- * Colour brick: a lock that only its own colour opens. A pulse of BrickColor hitting it through any face is used up
- * breaking it; from the end of that logical instant the cell is open and later pulses pass straight through,
- * unchanged. Any other colour is blocked while it stands. Reset restores the brick. Fixed.
+ * Brick: opens the way for later light. The first pulse of any colour hitting it (any face) is used up breaking it;
+ * from the end of that logical instant the cell is open and later pulses pass straight through, unchanged. Every
+ * pulse arriving in the instant it breaks is used up too. Reset restores the brick. Fixed.
  */
 UCLASS()
-class HUEBOX_API AHueColorBrickBlock : public APulseBlock
+class HUEBOX_API AHueBrickBlock : public APulseBlock
 {
 	GENERATED_BODY()
 
 public:
-	AHueColorBrickBlock();
+	AHueBrickBlock();
 
 	virtual EPulseResponse ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim) override;
 	virtual void OnTimeGroupEnd(UPulseSubsystem& Sim) override;
@@ -128,19 +137,14 @@ public:
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
 
-	EHueColor GetBrickColor() const { return BrickColor; }
-	void SetBrickColor(EHueColor InColor);
 	bool IsBroken() const { return bBroken; }
 	/** Logical time (ms) the brick broke this attempt; -1 while it stands. */
 	int64 GetBrokenAtMs() const { return BrokenAtMs; }
 
 protected:
-	UPROPERTY(EditAnywhere, Category = "Hue|Brick")
-	EHueColor BrickColor = EHueColor::Y;
-
 	bool bBroken = false;
-	/** A matching pulse hit it during the current instant; it opens in OnTimeGroupEnd, so pulses arriving at the same
-	 *  time are still blocked whatever order the queue hands them over in. */
+	/** A pulse hit it during the current instant; it opens in OnTimeGroupEnd, so pulses arriving at the same time are
+	 *  spent as well whatever order the queue hands them over in. */
 	bool bBreakPending = false;
 	int64 BrokenAtMs = -1;
 };

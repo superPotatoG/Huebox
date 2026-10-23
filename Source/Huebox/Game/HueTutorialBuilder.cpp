@@ -83,11 +83,9 @@ namespace HueTutorialPrivate
 		return Spec;
 	}
 
-	FHueBlockSpec MakeBrick(int32 X, int32 Y, EHueColor Color)
+	FHueBlockSpec MakeBrick(int32 X, int32 Y)
 	{
-		FHueBlockSpec Spec = MakeBlock(EHueBlockKind::ColorBrick, X, Y);
-		Spec.BrickColor = Color;
-		return Spec;
+		return MakeBlock(EHueBlockKind::Brick, X, Y);
 	}
 
 	FHuePickupSpec MakePickup(EHueModuleType Type, int32 Count, float LocalX, float LocalY)
@@ -146,7 +144,7 @@ namespace HueTutorialPrivate
 		case EHueBlockKind::ColorShift: return TEXT("Colour shift");
 		case EHueBlockKind::Delay:      return TEXT("Delay");
 		case EHueBlockKind::Mixer:      return TEXT("Mixer");
-		case EHueBlockKind::ColorBrick: return TEXT("Colour brick");
+		case EHueBlockKind::Brick:      return TEXT("Brick");
 		default:                        return TEXT("Block");
 		}
 	}
@@ -279,7 +277,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 
 	OutLayouts.Reset();
 
-	// Notation in comments: S Source, R Receiver, X Barrier, K Colour brick, T Turn, C Colour shift, D Delay, M Mixer.
+	// Notation in comments: S Source, R Receiver, X Barrier, K Brick, T Turn, C Colour shift, D Delay, M Mixer.
 	// Board-local: East = +X ("right" for the viewer), North = +Y (towards the viewer), 4 cells/s = 0.25 s per cell.
 
 	// ---- Exercise 1: route a signal ------------------------------------------------------------------------------
@@ -392,41 +390,54 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	}
 
 	// ---- Exercise 4: colour key ----------------------------------------------------------------------------------
-	// One idea: a colour brick is a lock that only its own colour opens, and the key has to be made (A + G = Y).
-	// The push itself is ready; the order (key first, push after) reuses the delay from exercises 2 and 3.
+	// The yellow move in the yellow spotlight: a key colour does nothing to the motion, it makes the dancer do her move
+	// where she is - and the spotlight only counts it while she runs through it. Three steps, each from an earlier idea:
+	// open the brick with a spare light (routing, ex 1), make Y = A + G (mixing, ex 3), time it to her pass (delay).
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(3,
 			TEXT("4 · Colour Key"),
-			TEXT("The push (A) is ready, but a yellow brick blocks it, and only yellow light (Y) breaks a yellow brick. ")
-			TEXT("Light adds up: red A + green G = Y. {Supply}: put the mixer where the A and G pulses meet so its Y hits ")
-			TEXT("the brick, then delay the push so it arrives after the brick is gone.")));
+			TEXT("When yellow light (Y) reaches the dancer she does her yellow move - it counts only inside the yellow ")
+			TEXT("spotlight, which she runs through. {Supply}. 1) A brick blocks the push: any light breaks it but is used ")
+			TEXT("up, so open it first with the spare B. 2) Light adds up: A + G = Y - mix where they meet. 3) Delay the Y ")
+			TEXT("until she is in the spotlight.")));
 
 		Layout.Blocks = {
-			// The push: A along row 3 reaches K(3,3) at 0.75 s; behind it R (West face) at 1.25 s.
+			// The push: A along row 3 reaches K(3,3) at 0.75 s and R(4,3) (West face) at 1.00 s once K is open. Shipped,
+			// the push itself breaks K and is used up: the dancer never starts.
 			MakeSource(0, 3, EHueDir::East, EHueColor::A),
-			MakeBrick(3, 3, EHueColor::Y),
-			MakeReceiver(5, 3, { EHueDir::West }),
-			// The key: A from the west reaches (3,1) at 0.75 s, G from the east at 0.50 s (dt 0.25 s). Without a mixer
-			// they cross and stop at the opposite source.
-			MakeSource(0, 1, EHueDir::East, EHueColor::A),
+			MakeBrick(3, 3),
+			MakeReceiver(4, 3, { EHueDir::West, EHueDir::South }),
+			// The spare: B travelling West along row 4 past (3,4) at 0.25 s and off the board - unless a turn there
+			// sends it South into K (0.50 s, before the push).
+			MakeSource(4, 4, EHueDir::West, EHueColor::B),
+			// The key: A from (2,1) reaches (4,1) at 0.50 s, G from (5,1) at 0.25 s (dt 0.25 s). Without a mixer they
+			// cross and stop at the opposite source.
+			MakeSource(2, 1, EHueDir::East, EHueColor::A),
 			MakeSource(5, 1, EHueDir::West, EHueColor::G),
 		};
 
 		Layout.Pickups = {
-			MakePickup(EHueModuleType::Mixer, 1, 100.f, 720.f),
-			MakePickup(EHueModuleType::Delay, 1, 260.f, 720.f),
+			MakePickup(EHueModuleType::Turn, 1, 100.f, 720.f),
+			MakePickup(EHueModuleType::Mixer, 1, 260.f, 720.f),
+			MakePickup(EHueModuleType::Delay, 1, 420.f, 720.f),
 		};
 
-		FHueObjective PastHalfway = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Pushed past the halfway marker"));
-		PastHalfway.TrackFraction = 0.5f;
-		Layout.Objectives = { PastHalfway };
+		FHueObjective YellowMove = MakeObjective(EHueObjectiveType::KeyActionInZone, TEXT("The yellow move in the yellow spotlight"));
+		YellowMove.Color = EHueColor::Y;
+		// Centred between the 0.25 s delay steps both in the prediction (0.555 / 0.63) and in real physics, which runs
+		// ~0.015 ahead (0.57 / 0.645): the neighbours 2.00 s / 2.75 s stay >= 0.025 outside either way.
+		YellowMove.ZoneMin = 0.52f;
+		YellowMove.ZoneMax = 0.68f;
+		Layout.Objectives = { YellowMove };
 
-		// M(3,1) North: A (in0, 0.75 s) + G (in1, 0.50 s) -> Y leaves at 0.75 s, hits K from the South at 1.25 s; the brick
-		// opens when that instant ends. D(2,3) East 1.0 s: the push reaches K at 1.75 s, passes, R turns A at 2.25 s.
-		// Any delay >= 0.75 s works (0.5 s arrives in the very instant the brick breaks, which still blocks it).
+		// T(3,4) South [S+E]: the spare B turns South and breaks K at 0.50 s; the push passes at 0.75 s, R turns A at
+		// 1.00 s and the dancer runs (cruise 3 m/s = 0.075 of the track per 0.25 s). M(4,1) North: Y leaves at 0.50 s,
+		// D(4,2) North holds it, R gets it at 1.00 s + delay. Delay 2.25 s -> move at ~0.555, 2.50 s -> ~0.63 (both in the
+		// spotlight); 2.00 s (~0.48) is too early, 2.75 s (~0.705) too late.
 		Layout.SolutionBlocks = {
-			MakeBlock(EHueBlockKind::Mixer, 3, 1, EHueDir::North, true),
-			MakeDelay(2, 3, EHueDir::East, 1.0f, true),
+			MakeBlock(EHueBlockKind::Turn, 3, 4, EHueDir::South, true),
+			MakeBlock(EHueBlockKind::Mixer, 4, 1, EHueDir::North, true),
+			MakeDelay(4, 2, EHueDir::North, 2.25f, true),
 		};
 	}
 }
@@ -453,8 +464,8 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	case EHueBlockKind::Barrier:
 		BlockClass = AHueBarrierBlock::StaticClass();
 		break;
-	case EHueBlockKind::ColorBrick:
-		BlockClass = AHueColorBrickBlock::StaticClass();
+	case EHueBlockKind::Brick:
+		BlockClass = AHueBrickBlock::StaticClass();
 		break;
 	case EHueBlockKind::Turn:
 	case EHueBlockKind::ColorShift:
@@ -493,10 +504,6 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	else if (AHueDelayBlock* DelayBlock = Cast<AHueDelayBlock>(Block))
 	{
 		DelayBlock->SetDelaySeconds(Spec.DelaySeconds);
-	}
-	else if (AHueColorBrickBlock* Brick = Cast<AHueColorBrickBlock>(Block))
-	{
-		Brick->SetBrickColor(Spec.BrickColor);
 	}
 	else if (AHueReceiverBlock* ReceiverBlock = Cast<AHueReceiverBlock>(Block))
 	{

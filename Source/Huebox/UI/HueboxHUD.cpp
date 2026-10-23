@@ -39,6 +39,9 @@ namespace HueHUD
 	static const FLinearColor TileInk(0.08f, 0.08f, 0.08f);
 	static const FLinearColor BarrierFill(0.03f, 0.03f, 0.035f);
 	static const FLinearColor BarrierEdge(0.42f, 0.42f, 0.42f);
+	/** Brick tile, as on the board (HueFixedBlocks.cpp). */
+	static const FLinearColor BrickFill(0.55f, 0.42f, 0.32f);
+	static const FLinearColor BrickBrokenFill(0.12f, 0.1f, 0.08f);
 	static const FLinearColor MapFloor(0.17f, 0.15f, 0.13f, 0.92f);
 	static const FLinearColor MapLine(0.36f, 0.33f, 0.3f, 0.9f);
 
@@ -337,18 +340,17 @@ namespace HueHUD
 			Tile.Fill = BarrierFill;
 			Tile.bSolid = true;
 		}
-		else if (const AHueColorBrickBlock* Brick = Cast<AHueColorBrickBlock>(&Block))
+		else if (const AHueBrickBlock* Brick = Cast<AHueBrickBlock>(&Block))
 		{
-			// Standing: a tile in the brick's colour lettered with the key it needs. Broken: a dimmed, empty tile.
-			const FLinearColor BrickColor = HueColor::ToLinear(Brick->GetBrickColor());
+			// Standing: a stone tile marked "#". Broken: a dark, empty tile (the way is open).
 			if (Brick->IsBroken())
 			{
-				Tile.Fill = FLinearColor(BrickColor.R * 0.3f, BrickColor.G * 0.3f, BrickColor.B * 0.3f, 1.f);
+				Tile.Fill = BrickBrokenFill;
 			}
 			else
 			{
-				Tile.Fill = BrickColor;
-				Tile.Letter = HueColor::Label(Brick->GetBrickColor());
+				Tile.Fill = BrickFill;
+				Tile.Letter = TEXT("#");
 			}
 		}
 		else
@@ -468,7 +470,7 @@ namespace HueHUD
 	};
 
 	static const TCHAR* const BuildHelpFooter = TEXT("Modules come from this board's tray; collected blocks go back into it.");
-	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  Y-tile brick  (dots = pulses)");
+	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  # brick  (dots = pulses)");
 
 	/** Bottom hint bar of the Build view. */
 	static const FBinding BuildHints[] =
@@ -847,6 +849,10 @@ void AHueboxHUD::DrawBoardPanel(const APawn* Pawn, AExhibitManager* Manager, EHu
 				if (Objective.Type == EHueObjectiveType::StopInZone)
 				{
 					Text += FString::Printf(TEXT(" (hold %.1f/%.1f s)"), Board->GetHoldProgress(), Objective.HoldSeconds);
+				}
+				else if (Objective.Type == EHueObjectiveType::KeyActionInZone)
+				{
+					Text += FString::Printf(TEXT(" (%.0f-%.0f%% of the track)"), Objective.ZoneMin * 100.f, Objective.ZoneMax * 100.f);
 				}
 				HueHUD::AddWrapped(*this, Lines, Text, HueHUD::AmberColor, ContentWidth, S);
 			}

@@ -9,6 +9,8 @@ namespace HueSkinPrivate
 	const TCHAR* const MannequinPath = TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple");
 	const TCHAR* const JogPath = TEXT("/Game/Characters/Mannequins/Anims/Unarmed/Jog/MF_Unarmed_Jog_Fwd.MF_Unarmed_Jog_Fwd");
 	const TCHAR* const IdlePath = TEXT("/Game/Characters/Mannequins/Anims/Unarmed/MM_Idle.MM_Idle");
+	/** Placeholder key move from the template (a strike); a dance step can replace it later. */
+	const TCHAR* const KeyActionPath = TEXT("/Game/Characters/Mannequins/Anims/Unarmed/Attack/MM_Attack_01.MM_Attack_01");
 }
 
 UHuePerformerSkin::UHuePerformerSkin()
@@ -31,6 +33,7 @@ UHueSkin_Silhouette::UHueSkin_Silhouette()
 	PerformerMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(MannequinPath));
 	PerformerMoveAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(JogPath));
 	PerformerIdleAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(IdlePath));
+	PerformerKeyActionAnim = TSoftObjectPtr<UAnimSequence>(FSoftObjectPath(KeyActionPath));
 	PerformerScale = 0.7f;
 	bFaceMotionDirection = true;
 	bFlatPerformerColor = true;

@@ -65,6 +65,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
 	TSoftObjectPtr<UAnimSequence> PerformerIdleAnim;
 
+	/**
+	 * Played once when a key colour (Y, G, ...) reaches the performer: "the yellow move". Purely presentation - a dance
+	 * step, a martial-arts strike or a sword cut all fit; the rules only care where the performer is at that moment.
+	 * Empty: the key letter flashes on the performer instead.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
+	TSoftObjectPtr<UAnimSequence> PerformerKeyActionAnim;
+
 	/** Uniform scale of the performer mesh (the mannequin is ~180 cm tall). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Performer")
 	float PerformerScale = 0.45f;

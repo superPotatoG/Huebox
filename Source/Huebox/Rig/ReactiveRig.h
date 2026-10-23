@@ -47,6 +47,15 @@ public:
 	void ApplyColor(EHueColor NewColor);
 	EHueColor GetCurrentColor() const { return CurrentColor; }
 
+	/**
+	 * Receiver output for a key colour (not A / B / N): the performer does that colour's move right where it is (the
+	 * skin's key-action animation); the motion is not affected. A key zone of the same colour that the performer is
+	 * inside lights up. The move is reported in the next MakeSample until ClearKeyAction.
+	 */
+	void PerformKeyAction(EHueColor KeyColor);
+	/** Forget the move reported by MakeSample (the board calls it after evaluating its objectives). */
+	void ClearKeyAction() { bKeyActionPending = false; }
+
 	/** Physics on/off. Run start -> true. Pause stores the velocity and freezes; resume restores it. */
 	void SetMotionActive(bool bActive);
 	void SetMotionPaused(bool bPaused);
@@ -85,8 +94,9 @@ public:
 	/**
 	 * Fixed-step integration of the same model the physics uses (acceleration, speed cap, Chaos-style linear
 	 * damping v *= max(0, 1 - c*dt), inelastic end stops). Starts at CarriageStartFraction with colour N at rest;
-	 * Events (sorted by time, seconds since run start) change the colour. OnStep receives a sample after every
-	 * step (ReceiverColor = colour active during that step) and the step length.
+	 * Events (sorted by time, seconds since run start) change the colour; key-colour events change nothing and show up
+	 * as a key action (bKeyAction, position at the event time) in the sample of the step they fall in. OnStep receives
+	 * a sample after every step (ReceiverColor = colour active during that step) and the step length.
 	 * Pure function of the tuning values; used by automation tests to validate the tutorial timings.
 	 */
 	FHueMotionPrediction PredictMotion(const TArray<FHueColorEvent>& Events, float DurationSeconds, float StepSeconds,
@@ -205,9 +215,28 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimSequence> IdleAnim;
 
+	/** Played once when a key colour reaches the performer (null: the move shows as the colour letter only). */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequence> KeyActionAnim;
+
 	/** +1 = performer faces away from the anchor, -1 = towards it. */
 	float FacingSign = -1.f;
 	bool bPlayingMoveAnim = false;
+
+	/** Seconds left of the key move currently shown (animation and letter); 0 = none. */
+	float KeyActionTimeLeft = 0.f;
+	EHueColor KeyActionShownColor = EHueColor::N;
+
+	/** The last key move, until the board picked it up (see MakeSample / ClearKeyAction). */
+	bool bKeyActionPending = false;
+	EHueColor PendingKeyColor = EHueColor::N;
+	float PendingKeyFraction = 0.f;
+
+	/** Spotlights / plates of the KeyActionInZone objectives: their material (lit up once the move happened inside)
+	 *  and the zone they stand for. Parallel arrays; the MIDs are also held by the marker components. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> KeyZoneMIDs;
+	TArray<FHueObjective> KeyZones;
 
 	EHueColor CurrentColor = EHueColor::N;
 	bool bMotionActive = false;
@@ -226,8 +255,13 @@ private:
 
 	void ApplySkin();
 	void ClearSkinComponents();
-	/** Loop animation, play rate and facing of the performer from the current speed. */
-	void UpdatePerformer();
+	/** Loop animation, play rate and facing of the performer from the current speed (a key move plays out first). */
+	void UpdatePerformer(float DeltaSeconds);
+	/** Back to the loop animation that fits the current speed (after a key move, on reset). */
+	void ResumeLoopAnimation();
+	/** Key-zone marker colour: dim while waiting, bright once the move happened inside. */
+	FLinearColor KeyZoneColor(EHueColor KeyColor, bool bLit) const;
+	void SetKeyZonesLit(bool bLit);
 	/** Unlit flat-colour material instance (M_HueUnlit, falls back to the basic shape material). */
 	UMaterialInstanceDynamic* MakeFlatMID(UObject* Outer, const FLinearColor& Color) const;
 	/** Objectives last shown, so a skin change can rebuild the markers in the new style. */

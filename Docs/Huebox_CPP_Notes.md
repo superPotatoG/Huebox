@@ -61,7 +61,7 @@ Space ─▶ AExhibitManager（Build/Running/Paused/Ended/Complete 状态机）
               ▼
         UPulseSubsystem（逻辑时间事件队列）──ReceivePulse()──▶ APulseBlock 子类
               │                                              Turn / ColorShift / Delay / Mixer
-              │                                              Source / Receiver / Barrier / ColorBrick
+              │                                              Source / Receiver / Barrier / Brick
               └─ Receiver 在“同一时刻组”结束时 ─▶ AReactiveRig.ApplyColor(A/B/N)
                                                      └─ Chaos 物理小车（+ 人偶）
 ```
@@ -71,8 +71,9 @@ Space ─▶ AExhibitManager（Build/Running/Paused/Ended/Complete 状态机）
 - **颜色模型（10-22 起，加色光）**：每种颜色是红 / 绿 / 蓝三原色的一个集合，用 3 位掩码表示（`HueColor::ToMask`）。A = 红，B = 青（绿 + 蓝），N = 白（三色），另外还有 G 绿、Y 黄（红 + 绿）、M 品红（红 + 蓝）、V 紫（蓝）。规则都由掩码推出来：
   - **混合器**（`HueColor::Mix`）：两种颜色没有共同原色时相加（按位或），例如 A + B = N、A + G = Y；有共同原色就失败（A + A、任何颜色 + N、A + Y）。原来的“A + B → N”只是其中一种情况。
   - **变色块**（`HueColor::Shift`）：变成互补色（按位取反），A ↔ B、G ↔ M、Y ↔ V；N 不变。
-  - **舞者只认 A / B / N**（`HueColor::DrivesRig`）。其他颜色是“钥匙”，本身没有效果，只作用于它碰到的方块；到达接收器时被吸收并给出提示，也不参与同一时刻的冲突判定。
-- **色砖**（`AHueColorBrickBlock`）：只有同色脉冲能打碎，而且这个脉冲会被用掉；其他颜色被挡住。打碎在“同一时刻组”结束时（`OnTimeGroupEnd`）才生效，所以同一毫秒到达的其他脉冲仍会被挡，结果与事件队列的处理顺序无关。重置后恢复原样。
+  - **只有 A / B / N 改变舞者的运动**（`HueColor::DrivesRig`）。其他颜色是“钥匙”：到达接收器后不参与同一时刻的冲突判定，而是在这一时刻结束时交给舞者（`AReactiveRig::PerformKeyAction`），她当场做这个颜色的动作。动作只是皮肤里的一段动画（`PerformerKeyActionAnim`），物理不受影响。
+  - **钥匙动作的判定**：舞者记录做动作时所在的位置，`MakeSample` 把它带给棋盘；目标 `KeyActionInZone` 要求颜色对、位置在区域内（例如黄色聚光灯 52–68%）。`PredictMotion` 也认得钥匙事件，所以测试能离线扫描每个延迟值会把动作放在哪里。
+- **砖**（`AHueBrickBlock`）：任何光都能打碎，打碎它的那束光会被用掉。打碎在“同一时刻组”结束时（`OnTimeGroupEnd`）才生效，所以同一毫秒到达的其他脉冲也会被用掉，结果与事件队列的处理顺序无关。重置后恢复原样。
 - **颜色 → 物理**：A 同色相斥，B 异色相吸，均为 `AddForce(..., bAccelChange=true)` 并限速；N 关闭颜色力并把阻尼调高，逐渐刹停。小车用 SixDOF 锁住 Y/Z 平移和全部旋转，只能沿轨道运动。
 - **限制**：最多 16 个活跃信号；每个信号最多 64 次模块操作，超过就判定为循环并终止；每次运行最长 20 s。
 - **胜利条件**：目标必须按顺序完成，一开始就站在目标区里不算。

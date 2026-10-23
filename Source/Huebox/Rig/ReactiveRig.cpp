@@ -64,6 +64,12 @@ namespace HueRigPrivate
 	constexpr float ZonePlateWidth = 90.f;
 	constexpr float ZonePlateThickness = 2.f;
 
+	/** Key moves: how long the key letter shows when the skin has no key-action animation. */
+	constexpr float KeyActionLetterSeconds = 1.0f;
+	/** Key-zone spotlight / plate glow (multiplies the key colour; the unlit material blooms above 1). */
+	constexpr float KeyZoneDimGlow = 3.5f;
+	constexpr float KeyZoneLitGlow = 10.f;
+
 	static const FLinearColor TrackColor(0.4f, 0.42f, 0.45f);
 	static const FLinearColor StopColor(0.15f, 0.15f, 0.15f);
 	static const FLinearColor LeaveStartMarkerColor(0.55f, 0.55f, 0.55f);
@@ -328,7 +334,7 @@ void AReactiveRig::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	UpdatePerformer();
+	UpdatePerformer(DeltaSeconds);
 
 	if (!bMotionActive || bMotionPaused || !IsValid(Carriage) || !Carriage->IsSimulatingPhysics())
 	{
@@ -367,6 +373,65 @@ void AReactiveRig::ApplyColor(EHueColor NewColor)
 		Carriage->SetLinearDamping(NewColor == EHueColor::N ? BrakeDamping : BaseDamping);
 	}
 	UpdateColorVisuals();
+}
+
+void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
+{
+	const float Fraction = GetCarriageFraction();
+	bKeyActionPending = true;
+	PendingKeyColor = KeyColor;
+	PendingKeyFraction = Fraction;
+
+	// The lock this key opens: every zone of its colour the performer stands in right now lights up.
+	for (int32 Index = 0; Index < KeyZones.Num() && Index < KeyZoneMIDs.Num(); ++Index)
+	{
+		const FHueObjective& Zone = KeyZones[Index];
+		if (Zone.Color == KeyColor && Fraction >= Zone.ZoneMin && Fraction <= Zone.ZoneMax && KeyZoneMIDs[Index])
+		{
+			KeyZoneMIDs[Index]->SetVectorParameterValue(TEXT("Color"), KeyZoneColor(KeyColor, /*bLit*/ true));
+		}
+	}
+
+	// Presentation: the skin's move plays once (the physics body keeps moving underneath), the key letter shows
+	// on the performer meanwhile.
+	KeyActionShownColor = KeyColor;
+	KeyActionTimeLeft = HueRigPrivate::KeyActionLetterSeconds;
+	if (KeyActionAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
+	{
+		Figure->SetPlayRate(1.f);
+		Figure->PlayAnimation(KeyActionAnim, /*bLooping*/ false);
+		bPlayingMoveAnim = false;
+		KeyActionTimeLeft = FMath::Max(KeyActionAnim->GetPlayLength(), 0.1f);
+	}
+
+	const FLinearColor Color = HueColor::ToLinear(KeyColor);
+	if (CarriageLabel)
+	{
+		CarriageLabel->SetText(FText::FromString(HueColor::Label(KeyColor)));
+		CarriageLabel->SetTextRenderColor(Color.ToFColor(true));
+	}
+	if (StateLabel)
+	{
+		StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: %s move"), *GetPerformerName(), HueColor::Label(KeyColor))));
+		StateLabel->SetTextRenderColor(Color.ToFColor(true));
+	}
+}
+
+FLinearColor AReactiveRig::KeyZoneColor(EHueColor KeyColor, bool bLit) const
+{
+	// HDR emissive on the unlit material: dim enough to read as "waiting" against the glowing screen, bright once lit.
+	return HueColor::ToLinear(KeyColor) * (bLit ? HueRigPrivate::KeyZoneLitGlow : HueRigPrivate::KeyZoneDimGlow);
+}
+
+void AReactiveRig::SetKeyZonesLit(bool bLit)
+{
+	for (int32 Index = 0; Index < KeyZones.Num() && Index < KeyZoneMIDs.Num(); ++Index)
+	{
+		if (KeyZoneMIDs[Index])
+		{
+			KeyZoneMIDs[Index]->SetVectorParameterValue(TEXT("Color"), KeyZoneColor(KeyZones[Index].Color, bLit));
+		}
+	}
 }
 
 void AReactiveRig::SetMotionActive(bool bActive)
@@ -454,6 +519,13 @@ void AReactiveRig::ResetRig()
 	bMotionActive = false;
 	bMotionPaused = false;
 	PausedVelocity = FVector::ZeroVector;
+	bKeyActionPending = false;
+	if (KeyActionTimeLeft > 0.f)
+	{
+		KeyActionTimeLeft = 0.f;
+		ResumeLoopAnimation();
+	}
+	SetKeyZonesLit(false);
 	ApplyColor(EHueColor::N);
 	AttemptMaxFraction = TrackLength > KINDA_SMALL_NUMBER ? static_cast<float>(GetLocalStart().X) / TrackLength : 0.f;
 }
@@ -532,6 +604,9 @@ FHueRigSample AReactiveRig::MakeSample() const
 	Sample.TrackFraction = GetCarriageFraction();
 	Sample.SpeedFraction = TrackLength > KINDA_SMALL_NUMBER ? GetCarriageSpeed() / TrackLength : 0.f;
 	Sample.ReceiverColor = CurrentColor;
+	Sample.bKeyAction = bKeyActionPending;
+	Sample.KeyActionColor = PendingKeyColor;
+	Sample.KeyActionFraction = PendingKeyFraction;
 	return Sample;
 }
 
@@ -564,10 +639,22 @@ FHueMotionPrediction AReactiveRig::PredictMotion(const TArray<FHueColorEvent>& E
 	for (int32 Step = 0; Step < NumSteps; ++Step)
 	{
 		// Colour active during [t, t + dt): every event with time <= t (double time: no drift over 2400 steps).
+		// Key colours leave the motion alone; the move happens where the performer is at that time.
 		const double T = static_cast<double>(Step) * Dt;
+		FHueRigSample Sample;
 		while (NextEvent < Sorted.Num() && Sorted[NextEvent].TimeSeconds <= T + 1e-6)
 		{
-			Color = Sorted[NextEvent].Color;
+			const EHueColor EventColor = Sorted[NextEvent].Color;
+			if (HueColor::DrivesRig(EventColor))
+			{
+				Color = EventColor;
+			}
+			else
+			{
+				Sample.bKeyAction = true;
+				Sample.KeyActionColor = EventColor;
+				Sample.KeyActionFraction = X / TrackLength;
+			}
 			++NextEvent;
 		}
 
@@ -597,7 +684,6 @@ FHueMotionPrediction AReactiveRig::PredictMotion(const TArray<FHueColorEvent>& E
 		const float Fraction = X / TrackLength;
 		Result.MaxFraction = FMath::Max(Result.MaxFraction, Fraction);
 
-		FHueRigSample Sample;
 		Sample.TrackFraction = Fraction;
 		Sample.SpeedFraction = V / TrackLength;
 		Sample.ReceiverColor = Color;
@@ -758,7 +844,9 @@ void AReactiveRig::ClearSkinComponents()
 	BackdropMID = nullptr;
 	MoveAnim = nullptr;
 	IdleAnim = nullptr;
+	KeyActionAnim = nullptr;
 	bPlayingMoveAnim = false;
+	KeyActionTimeLeft = 0.f;
 }
 
 void AReactiveRig::ApplySkin()
@@ -866,6 +954,7 @@ void AReactiveRig::ApplySkin()
 			FlattenMaterials(Figure);
 			MoveAnim = Skin->PerformerMoveAnim.IsNull() ? nullptr : Skin->PerformerMoveAnim.LoadSynchronous();
 			IdleAnim = Skin->PerformerIdleAnim.IsNull() ? nullptr : Skin->PerformerIdleAnim.LoadSynchronous();
+			KeyActionAnim = Skin->PerformerKeyActionAnim.IsNull() ? nullptr : Skin->PerformerKeyActionAnim.LoadSynchronous();
 			Figure->SetAnimationMode(EAnimationMode::AnimationSingleNode);
 			if (IdleAnim)
 			{
@@ -926,8 +1015,21 @@ void AReactiveRig::ApplySkin()
 	UpdateColorVisuals();
 }
 
-void AReactiveRig::UpdatePerformer()
+void AReactiveRig::UpdatePerformer(float DeltaSeconds)
 {
+	// A key move plays out first (animation and letter); then the loop animation and labels follow the motion again.
+	if (KeyActionTimeLeft > 0.f)
+	{
+		KeyActionTimeLeft -= FMath::Max(DeltaSeconds, 0.f);
+		if (KeyActionTimeLeft > 0.f)
+		{
+			return;
+		}
+		KeyActionTimeLeft = 0.f;
+		UpdateColorVisuals();
+		ResumeLoopAnimation();
+	}
+
 	if (!ActiveSkin || !IsValid(Figure) || !Figure->GetSkeletalMeshAsset())
 	{
 		return;
@@ -968,6 +1070,25 @@ void AReactiveRig::UpdatePerformer()
 		{
 			Figure->Stop();
 		}
+	}
+}
+
+void AReactiveRig::ResumeLoopAnimation()
+{
+	if (!IsValid(Figure) || !Figure->GetSkeletalMeshAsset())
+	{
+		return;
+	}
+	// UpdatePerformer picks the move loop up again on its next tick if the performer is moving.
+	bPlayingMoveAnim = false;
+	Figure->SetPlayRate(1.f);
+	if (IdleAnim)
+	{
+		Figure->PlayAnimation(IdleAnim, /*bLooping*/ true);
+	}
+	else
+	{
+		Figure->Stop();
 	}
 }
 
@@ -1027,6 +1148,35 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 			}
 			break;
 		}
+		case EHueObjectiveType::KeyActionInZone:
+		{
+			// The lock on the stage: a spotlight (or floor plate) in the key's colour, dim until the move happens in it.
+			const float ZoneMin = FMath::Clamp(FMath::Min(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
+			const float ZoneMax = FMath::Clamp(FMath::Max(Objective.ZoneMin, Objective.ZoneMax), 0.f, 1.f);
+			const float Length = FMath::Max((ZoneMax - ZoneMin) * TrackLength, 1.f);
+			const float CenterX = (ZoneMin + ZoneMax) * 0.5f * TrackLength;
+			const FLinearColor LabelColor = HueColor::ToLinear(Objective.Color);
+			const FString Caption = FString::Printf(TEXT("%s MOVE HERE"), HueColor::Label(Objective.Color));
+			UStaticMeshComponent* Marker = nullptr;
+			if (bSpotlight)
+			{
+				const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
+				Marker = AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
+					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), KeyZoneColor(Objective.Color, false),
+					APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
+				AddMarkerLabel(Caption, FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), LabelColor);
+			}
+			else
+			{
+				Marker = AddMarkerMesh(FVector(CenterX, 0.f, ZonePlateZ),
+					FVector(Length / 100.f, ZonePlateWidth / 100.f, ZonePlateThickness / 100.f), KeyZoneColor(Objective.Color, false),
+					nullptr, /*bFlat*/ true);
+				AddMarkerLabel(Caption, FVector(CenterX, ZonePlateWidth * 0.5f + 2.f, 135.f), LabelColor);
+			}
+			KeyZones.Add(Objective);
+			KeyZoneMIDs.Add(Marker ? Cast<UMaterialInstanceDynamic>(Marker->GetMaterial(0)) : nullptr);
+			break;
+		}
 		case EHueObjectiveType::ReceiverColor:
 		default:
 			break; // no marker on the track
@@ -1044,6 +1194,8 @@ void AReactiveRig::ClearObjectiveMarkers()
 		}
 	}
 	MarkerComponents.Reset();
+	KeyZoneMIDs.Reset();
+	KeyZones.Reset();
 
 	for (UTextRenderComponent* Label : MarkerLabels)
 	{

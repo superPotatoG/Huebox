@@ -11,8 +11,9 @@ DECLARE_LOG_CATEGORY_EXTERN(LogHuebox, Log, All);
  * Signal colour: additive light, i.e. a set of the primaries red, green and blue (HueColor::ToMask).
  *  Motion signals - the only colours the dancer reacts to: A = red (repels), B = cyan = green + blue (attracts),
  *  N = white = all three (brakes).
- *  Key colours - no effect of their own, they act on the blocks they hit (a colour brick breaks only for its colour):
- *  G = green, Y = yellow = red + green, M = magenta = red + blue, V = violet (blue).
+ *  Key colours - they never move the dancer: G = green, Y = yellow = red + green, M = magenta = red + blue,
+ *  V = violet (blue). A key colour reaching the dancer makes her do that colour's move where she is; objectives ask
+ *  for it inside a zone of that colour ("the yellow move in the yellow spotlight"). The move itself is skin data.
  * The set is closed under mixing (disjoint primaries add up) and colour shift (complement), so every pulse a board
  * can produce has a letter. Enum order is saved data: append new values at the end.
  */
@@ -171,7 +172,10 @@ enum class EHueObjectiveType : uint8
 	/** Carriage track fraction <= TrackFraction (came back towards the anchor). */
 	ReturnBelow,
 	/** Inside [ZoneMin, ZoneMax], slower than MaxSpeedFraction * TrackLength, for HoldSeconds. */
-	StopInZone
+	StopInZone,
+	/** A key colour (Color, e.g. Y) reaches the performer while it is inside [ZoneMin, ZoneMax] (moving or not): it does
+	 *  that colour's move in the zone ("the yellow move in the yellow spotlight"). */
+	KeyActionInZone
 };
 
 /** One ordered objective. Only the current (first incomplete) objective can be completed. */
@@ -207,7 +211,10 @@ struct FHueObjective
 	float HoldSeconds = 1.0f;
 };
 
-/** One timed colour change applied to the rig (receiver history / motion prediction input). */
+/**
+ * One timed colour delivered to the rig (receiver history / motion prediction input). A motion colour (A / B / N)
+ * changes the rig's state; a key colour makes the performer do that colour's move without changing the motion.
+ */
 struct FHueColorEvent
 {
 	float TimeSeconds = 0.f;
@@ -230,6 +237,12 @@ struct FHueRigSample
 	/** Signed speed along the track as a fraction of track length per second (+ = away from anchor). */
 	float SpeedFraction = 0.f;
 	EHueColor ReceiverColor = EHueColor::N;
+
+	/** The performer did a key colour's move since the previous sample: which colour, and where (track fraction at
+	 *  that moment, which can differ from TrackFraction by the motion of one frame). */
+	bool bKeyAction = false;
+	EHueColor KeyActionColor = EHueColor::N;
+	float KeyActionFraction = 0.f;
 };
 
 namespace HueDir
@@ -275,7 +288,7 @@ namespace HueColor
 	HUEBOX_API bool Mix(EHueColor First, EHueColor Second, EHueColor& OutMixed);
 	/** Colour-shift rule: the complementary colour (A <-> B, G <-> M, Y <-> V); N passes unchanged. */
 	HUEBOX_API EHueColor Shift(EHueColor Color);
-	/** A, B and N move the dancer; every other colour is a key that only acts on the blocks it hits. */
+	/** A, B and N move the dancer; every other colour is a key that triggers her move for that colour. */
 	HUEBOX_API bool DrivesRig(EHueColor Color);
 }
 

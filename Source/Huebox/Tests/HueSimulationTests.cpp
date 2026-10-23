@@ -1528,8 +1528,8 @@ bool FHueboxSimMixerTest::RunTest(const FString& Parameters)
 		ExpectHistory(*this, TEXT("N + A emits no N"), Case.Receiver->GetAppliedHistory(), { MakeEvent(0.75f, EHueColor::B) });
 	}
 
-	// Additive light beyond the stop: A + G -> Y at 0.50 s. Y is a key, not a motion signal: the receiver absorbs it
-	// at 1.00 s (warning) and keeps B.
+	// Additive light beyond the stop: A + G -> Y at 0.50 s. Y is a key, not a motion signal: at 1.00 s the receiver
+	// hands it to the dancer as her yellow move and keeps B.
 	{
 		FMixerScenario Case;
 		UTEST_TRUE(TEXT("A+G scenario built"), BuildMixerScenario(*this, TestWorld, 6, 2, EHueColor::A, 6, EHueColor::G, Case));
@@ -1540,10 +1540,11 @@ bool FHueboxSimMixerTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("A+G: no mixer failure (\"%s\")"), *Case.Mixer->GetLastFailure()), Case.Mixer->GetLastFailure().IsEmpty());
 		ExpectFeedback(*this, TEXT("A + G mixes to Y"), Sim->GetRunFeedbackLog(), TEXT("A + G -> Y"), true);
 		Clock.AdvanceTo(1.5);
-		ExpectHistory(*this, TEXT("A Y pulse never moves the dancer"), Case.Receiver->GetAppliedHistory(), { MakeEvent(0.75f, EHueColor::B) });
-		TestColor(*this, TEXT("The receiver keeps B"), Case.Receiver->GetCurrentColor(), EHueColor::B);
-		TestEqual(TEXT("An absorbed key colour is not a conflict"), Case.Receiver->GetConflictCount(), 0);
-		ExpectFeedback(*this, TEXT("Y at the receiver"), Sim->GetRunFeedbackLog(), TEXT("only reacts to A, B or N"), true);
+		ExpectHistory(*this, TEXT("The Y is delivered as a move"), Case.Receiver->GetAppliedHistory(),
+			{ MakeEvent(0.75f, EHueColor::B), MakeEvent(1.0f, EHueColor::Y) });
+		TestColor(*this, TEXT("A key never changes the motion colour: the receiver keeps B"), Case.Receiver->GetCurrentColor(), EHueColor::B);
+		TestEqual(TEXT("A key colour is not a conflict"), Case.Receiver->GetConflictCount(), 0);
+		ExpectFeedback(*this, TEXT("Y at the receiver"), Sim->GetRunFeedbackLog(), TEXT("Receiver -> Y: the yellow move"), true);
 	}
 
 	// A + Y both hold red: they cannot add up.
@@ -1562,8 +1563,8 @@ bool FHueboxSimMixerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxSimColorBrickTest, "Huebox.Simulation.ColorBrick", HUEBOX_TEST_FLAGS)
-bool FHueboxSimColorBrickTest::RunTest(const FString& Parameters)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxSimBrickTest, "Huebox.Simulation.Brick", HUEBOX_TEST_FLAGS)
+bool FHueboxSimBrickTest::RunTest(const FString& Parameters)
 {
 	using namespace HueboxTests;
 
@@ -1573,12 +1574,12 @@ bool FHueboxSimColorBrickTest::RunTest(const FString& Parameters)
 	Sim->SetVisualsEnabled(false);
 
 	// Every case: 8x5 board, push A from S(0,3) East through brick K(3,3) (reached at 0.75 s) to R(6,3) (West face,
-	// reached at 1.50 s if the brick is open). A key source at (3,KeyY) facing North hits K from the South at
-	// (3 - KeyY) * 0.25 s.
+	// reached at 1.50 s if the brick is open). An opener source at (3,OpenerY) facing North hits K from the South at
+	// (3 - OpenerY) * 0.25 s.
 	struct FBrickCase
 	{
 		AHueBoard* Board = nullptr;
-		AHueColorBrickBlock* Brick = nullptr;
+		AHueBrickBlock* Brick = nullptr;
 		AHueReceiverBlock* Receiver = nullptr;
 	};
 	auto BuildCase = [this, &TestWorld](int32 BoardIndex, int32 KeyY, EHueColor KeyColor, FBrickCase& Out)
@@ -1590,11 +1591,7 @@ bool FHueboxSimColorBrickTest::RunTest(const FString& Parameters)
 			AddError(TEXT("Brick case: board could not be spawned"));
 			return false;
 		}
-		Out.Brick = AddBlock<AHueColorBrickBlock>(*this, Out.Board, FIntPoint(3, 3), EHueDir::East, /*bRemovable*/ false);
-		if (Out.Brick)
-		{
-			Out.Brick->SetBrickColor(EHueColor::Y);
-		}
+		Out.Brick = AddBlock<AHueBrickBlock>(*this, Out.Board, FIntPoint(3, 3), EHueDir::East, /*bRemovable*/ false);
 		Out.Receiver = AddReceiver(*this, Out.Board, FIntPoint(6, 3), { EHueDir::West });
 		bool bSources = AddSource(*this, Out.Board, FIntPoint(0, 3), EHueDir::East, EHueColor::A) != nullptr;
 		if (KeyY >= 0)
@@ -1604,44 +1601,34 @@ bool FHueboxSimColorBrickTest::RunTest(const FString& Parameters)
 		return Out.Brick && Out.Receiver && bSources;
 	};
 
-	// No key: the standing brick blocks the push and says which colour it needs.
+	// No opener: the push itself breaks the brick and is used up - the way opens, but nothing reaches the receiver.
 	{
 		FBrickCase Case;
-		UTEST_TRUE(TEXT("No-key case built"), BuildCase(0, INDEX_NONE, EHueColor::Y, Case));
-		UTEST_TRUE(TEXT("No-key run started"), StartBoardRun(Sim, Case.Board));
+		UTEST_TRUE(TEXT("No-opener case built"), BuildCase(0, INDEX_NONE, EHueColor::B, Case));
+		UTEST_TRUE(TEXT("No-opener run started"), StartBoardRun(Sim, Case.Board));
 		FSimClock Clock(Sim);
 		Clock.AdvanceTo(2.0);
-		TestFalse(TEXT("No key: the brick still stands"), Case.Brick->IsBroken());
-		ExpectHistory(*this, TEXT("No key: nothing reaches the receiver"), Case.Receiver->GetAppliedHistory(), {});
-		TestNotNull(FString::Printf(TEXT("No key: blocked warning at the brick. Log: %s"), *DescribeFeedback(Sim->GetRunFeedbackLog())),
-			FindFeedbackAt(Sim->GetRunFeedbackLog(), EHueFeedbackKind::Warning, FIntPoint(3, 3)));
-		ExpectFeedback(*this, TEXT("No key: the warning names the key"), Sim->GetRunFeedbackLog(), TEXT("only Y (yellow) light breaks it"), true);
+		TestTrue(TEXT("No opener: the push broke the brick"), Case.Brick->IsBroken());
+		TestEqual(TEXT("No opener: broken at 750 ms"), Case.Brick->GetBrokenAtMs(), static_cast<int64>(750));
+		ExpectHistory(*this, TEXT("No opener: the push was used up"), Case.Receiver->GetAppliedHistory(), {});
+		ExpectFeedback(*this, TEXT("No opener: the break names the pulse it used up"), Sim->GetRunFeedbackLog(), TEXT("broken by A"), true);
 	}
 
-	// The wrong key (G) is blocked like any other colour.
+	// Any colour opens it: G (a key colour) and B (a motion colour) first, the push passes unchanged at 0.75 s.
+	const EHueColor Openers[] = { EHueColor::G, EHueColor::B };
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Openers); ++Index)
 	{
+		const EHueColor Opener = Openers[Index];
 		FBrickCase Case;
-		UTEST_TRUE(TEXT("Wrong-key case built"), BuildCase(1, 2, EHueColor::G, Case));
-		UTEST_TRUE(TEXT("Wrong-key run started"), StartBoardRun(Sim, Case.Board));
-		FSimClock Clock(Sim);
-		Clock.AdvanceTo(2.0);
-		TestFalse(TEXT("Wrong key: the brick still stands"), Case.Brick->IsBroken());
-		ExpectHistory(*this, TEXT("Wrong key: nothing reaches the receiver"), Case.Receiver->GetAppliedHistory(), {});
-	}
-
-	// Y first (0.25 s), push later (0.75 s): the key is used up, the brick opens, the push passes unchanged.
-	{
-		FBrickCase Case;
-		UTEST_TRUE(TEXT("Key-first case built"), BuildCase(2, 2, EHueColor::Y, Case));
-		UTEST_TRUE(TEXT("Key-first run started"), StartBoardRun(Sim, Case.Board));
+		UTEST_TRUE(FString::Printf(TEXT("%s-opener case built"), ColorName(Opener)), BuildCase(1 + Index, 2, Opener, Case));
+		UTEST_TRUE(FString::Printf(TEXT("%s-opener run started"), ColorName(Opener)), StartBoardRun(Sim, Case.Board));
 		FSimClock Clock(Sim);
 		Clock.AdvanceTo(0.25);
-		TestTrue(TEXT("Key first: broken at the end of the 0.25 s instant"), Case.Brick->IsBroken());
-		TestEqual(TEXT("Key first: broken at 250 ms"), Case.Brick->GetBrokenAtMs(), static_cast<int64>(250));
+		TestTrue(FString::Printf(TEXT("%s opener: broken at the end of the 0.25 s instant"), ColorName(Opener)), Case.Brick->IsBroken());
 		Clock.AdvanceTo(2.0);
-		ExpectHistory(*this, TEXT("Key first: the push reaches the receiver"), Case.Receiver->GetAppliedHistory(), { MakeEvent(1.5f, EHueColor::A) });
-		ExpectFeedback(*this, TEXT("Key first: the break is reported"), Sim->GetRunFeedbackLog(), TEXT("broken by Y"), true);
-		TestEqual(FString::Printf(TEXT("Key first: no blocked pulses. Log: %s"), *DescribeFeedback(Sim->GetRunFeedbackLog())),
+		ExpectHistory(*this, FString::Printf(TEXT("%s opener: the push reaches the receiver"), ColorName(Opener)),
+			Case.Receiver->GetAppliedHistory(), { MakeEvent(1.5f, EHueColor::A) });
+		TestEqual(FString::Printf(TEXT("%s opener: no warnings. Log: %s"), ColorName(Opener), *DescribeFeedback(Sim->GetRunFeedbackLog())),
 			CountFeedbackOfKind(Sim->GetRunFeedbackLog(), EHueFeedbackKind::Warning), 0);
 
 		// Bricks are run state: a reset rebuilds it.
@@ -1651,17 +1638,18 @@ bool FHueboxSimColorBrickTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Reset clears the break time"), Case.Brick->GetBrokenAtMs(), static_cast<int64>(-1));
 	}
 
-	// Key and push in the same instant (both 0.75 s): the brick opens only when the instant ends, so the push is
-	// blocked regardless of queue order.
+	// Opener and push in the same instant (both 0.75 s): the brick opens only when the instant ends, so both are used
+	// up regardless of queue order.
 	{
 		FBrickCase Case;
-		UTEST_TRUE(TEXT("Same-instant case built"), BuildCase(3, 0, EHueColor::Y, Case));
+		UTEST_TRUE(TEXT("Same-instant case built"), BuildCase(3, 0, EHueColor::B, Case));
 		UTEST_TRUE(TEXT("Same-instant run started"), StartBoardRun(Sim, Case.Board));
 		FSimClock Clock(Sim);
 		Clock.AdvanceTo(0.75);
 		TestTrue(TEXT("Same instant: the brick broke"), Case.Brick->IsBroken());
 		Clock.AdvanceTo(2.0);
-		ExpectHistory(*this, TEXT("Same instant: the push was still blocked"), Case.Receiver->GetAppliedHistory(), {});
+		ExpectHistory(*this, TEXT("Same instant: the push was used up too"), Case.Receiver->GetAppliedHistory(), {});
+		ExpectFeedback(*this, TEXT("Same instant: reported"), Sim->GetRunFeedbackLog(), TEXT("same instant it broke"), true);
 	}
 	return true;
 }
@@ -1998,6 +1986,29 @@ bool FHueboxObjectivesOrderTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("0.35 is not below 0.30"), Board->EvaluateObjectives(MakeSample(0.35f, -0.1f, EHueColor::A), 0.1f));
 	TestTrue(TEXT("0.25 is below 0.30"), Board->EvaluateObjectives(MakeSample(0.25f, -0.1f, EHueColor::A), 0.1f));
 
+	// Key move in a zone: only a move of the right colour, made inside the zone, counts - where the performer is when
+	// the board samples does not matter, and simply running through the zone does not count.
+	{
+		FHueObjective KeyMove;
+		KeyMove.Type = EHueObjectiveType::KeyActionInZone;
+		KeyMove.Color = EHueColor::Y;
+		KeyMove.ZoneMin = 0.5f;
+		KeyMove.ZoneMax = 0.6f;
+		Board->SetObjectives({ KeyMove });
+		auto MakeKeySample = [](float Fraction, bool bMove, EHueColor MoveColor, float MoveFraction)
+		{
+			FHueRigSample Sample = MakeSample(Fraction, 0.3f);
+			Sample.bKeyAction = bMove;
+			Sample.KeyActionColor = MoveColor;
+			Sample.KeyActionFraction = MoveFraction;
+			return Sample;
+		};
+		TestFalse(TEXT("Running through the zone without a move"), Board->EvaluateObjectives(MakeKeySample(0.55f, false, EHueColor::N, 0.f), 0.1f));
+		TestFalse(TEXT("A G move in the Y zone"), Board->EvaluateObjectives(MakeKeySample(0.55f, true, EHueColor::G, 0.55f), 0.1f));
+		TestFalse(TEXT("A Y move before the zone"), Board->EvaluateObjectives(MakeKeySample(0.55f, true, EHueColor::Y, 0.45f), 0.1f));
+		TestTrue(TEXT("A Y move inside the zone"), Board->EvaluateObjectives(MakeKeySample(0.62f, true, EHueColor::Y, 0.58f), 0.1f));
+	}
+
 	Board->SetObjectives(TArray<FHueObjective>());
 	TestFalse(TEXT("A board without objectives is never complete"), Board->AreObjectivesComplete());
 	return true;
@@ -2186,67 +2197,108 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 	FTutorialFixture Fixture;
 	UTEST_TRUE(TEXT("Exercise 4 spawned"), SpawnTutorialBoard(*this, TestWorld, Layout, Fixture));
 
-	AHueColorBrickBlock* Brick = nullptr;
+	AHueBrickBlock* Brick = nullptr;
 	Fixture.Board->ForEachBlock([&Brick](APulseBlock& Block)
 	{
 		if (!Brick)
 		{
-			Brick = Cast<AHueColorBrickBlock>(&Block);
+			Brick = Cast<AHueBrickBlock>(&Block);
 		}
 	});
 	UTEST_NOT_NULL(TEXT("Exercise 4 brick"), Brick);
-	TestColor(*this, TEXT("Exercise 4 brick colour"), Brick->GetBrickColor(), EHueColor::Y);
 
-	const FHueBlockSpec* MixerSpec = Layout.SolutionBlocks.FindByPredicate([](const FHueBlockSpec& Spec) { return Spec.Kind == EHueBlockKind::Mixer; });
-	const FHueBlockSpec* DelaySpec = Layout.SolutionBlocks.FindByPredicate([](const FHueBlockSpec& Spec) { return Spec.Kind == EHueBlockKind::Delay; });
-	UTEST_TRUE(TEXT("Exercise 4 solution: a mixer and a delay"), MixerSpec != nullptr && DelaySpec != nullptr);
+	const FHueObjective* YellowMove = FindObjective(Layout, EHueObjectiveType::KeyActionInZone);
+	UTEST_NOT_NULL(TEXT("Exercise 4: a key-move objective"), YellowMove);
+	TestColor(*this, TEXT("Exercise 4: the move is yellow"), YellowMove->Color, EHueColor::Y);
 
-	// As shipped: the push hits the standing brick at 0.75 s; the key pulses cross and stop at the opposite sources.
+	auto FindSpec = [&Layout](EHueBlockKind Kind)
+	{
+		return Layout.SolutionBlocks.FindByPredicate([Kind](const FHueBlockSpec& Spec) { return Spec.Kind == Kind; });
+	};
+	const FHueBlockSpec* TurnSpec = FindSpec(EHueBlockKind::Turn);
+	const FHueBlockSpec* MixerSpec = FindSpec(EHueBlockKind::Mixer);
+	const FHueBlockSpec* DelaySpec = FindSpec(EHueBlockKind::Delay);
+	UTEST_TRUE(TEXT("Exercise 4 solution: a turn, a mixer and a delay"), TurnSpec && MixerSpec && DelaySpec);
+
+	/** Where the predicted run does its first move (-1 = none). */
+	auto KeyMoveFraction = [&Fixture](const TArray<FHueColorEvent>& History)
+	{
+		float Fraction = -1.f;
+		Fixture.Rig->PredictMotion(History, Fixture.Board->RunTimeLimitSeconds, 1.f / 120.f,
+			[&Fraction](const FHueRigSample& Sample, float)
+			{
+				if (Sample.bKeyAction && Fraction < 0.f)
+				{
+					Fraction = Sample.KeyActionFraction;
+				}
+			});
+		return Fraction;
+	};
+
+	// As shipped: the push itself breaks the brick at 0.75 s and is used up - the dancer never starts.
 	{
 		FLogicRun Unsolved;
 		UTEST_TRUE(TEXT("Unsolved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Unsolved));
 		ExpectHistory(*this, TEXT("Exercise 4 unsolved"), Unsolved.History, {});
-		ExpectFeedback(*this, TEXT("Exercise 4 unsolved: the brick names its key"), Unsolved.Feedback, TEXT("only Y (yellow) light breaks it"), true);
+		ExpectFeedback(*this, TEXT("Exercise 4 unsolved: the push was used up on the brick"), Unsolved.Feedback, TEXT("broken by A at 0.75s"), true);
 		TestFalse(TEXT("Exercise 4 unsolved: objectives not complete"), EvaluateTutorialObjectives(Fixture, Unsolved.History).bComplete);
 	}
 
-	// Mixer only: the Y breaks the brick at 1.25 s, but the push already bounced off it at 0.75 s - order matters.
-	UTEST_NOT_NULL(TEXT("Mixer placed"), AHueTutorialBuilder::SpawnBlockFromSpec(Fixture.Board, *MixerSpec, Fixture.Rig));
+	// Step 1, the turn: the spare B breaks the brick at 0.50 s, the push passes and the receiver turns A at 1.00 s.
+	UTEST_NOT_NULL(TEXT("Turn placed"), AHueTutorialBuilder::SpawnBlockFromSpec(Fixture.Board, *TurnSpec, Fixture.Rig));
 	{
-		FLogicRun KeyOnly;
-		UTEST_TRUE(TEXT("Key-only run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, KeyOnly));
-		// The feedback names the inputs in arrival order: G (0.50 s) waits, A (0.75 s) completes the mix.
-		ExpectFeedback(*this, TEXT("Exercise 4 key only: G + A -> Y"), KeyOnly.Feedback, TEXT("G + A -> Y"), true);
-		ExpectFeedback(*this, TEXT("Exercise 4 key only: the brick breaks"), KeyOnly.Feedback, TEXT("broken by Y at 1.25s"), true);
-		ExpectHistory(*this, TEXT("Exercise 4 key only: the push came too early"), KeyOnly.History, {});
+		FLogicRun Opened;
+		UTEST_TRUE(TEXT("Opened run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Opened));
+		ExpectFeedback(*this, TEXT("Exercise 4 opened: the spare B broke the brick"), Opened.Feedback, TEXT("broken by B at 0.50s"), true);
+		ExpectHistory(*this, TEXT("Exercise 4 opened: the dancer runs"), Opened.History, { MakeEvent(1.0f, EHueColor::A) });
+		TestFalse(TEXT("Exercise 4 opened: running alone is not the yellow move"), EvaluateTutorialObjectives(Fixture, Opened.History).bComplete);
 	}
 
-	// Baseline solution (mixer + 1.0 s delay): the push passes at 1.75 s, the receiver turns A at 2.25 s.
+	// Step 2, the mixer: G (0.25 s) + A (0.50 s) -> Y reaches her at 1.00 s, together with the push - far too early.
+	UTEST_NOT_NULL(TEXT("Mixer placed"), AHueTutorialBuilder::SpawnBlockFromSpec(Fixture.Board, *MixerSpec, Fixture.Rig));
+	{
+		FLogicRun Early;
+		UTEST_TRUE(TEXT("Undelayed run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Early));
+		ExpectFeedback(*this, TEXT("Exercise 4 undelayed: G + A -> Y"), Early.Feedback, TEXT("G + A -> Y"), true);
+		ExpectHistory(*this, TEXT("Exercise 4 undelayed: push and move at once"), Early.History,
+			{ MakeEvent(1.0f, EHueColor::A), MakeEvent(1.0f, EHueColor::Y) });
+		const float Fraction = KeyMoveFraction(Early.History);
+		TestTrue(FString::Printf(TEXT("Exercise 4 undelayed: the move happens at the start (%.3f)"), Fraction), Fraction >= 0.f && Fraction < YellowMove->ZoneMin);
+		TestFalse(TEXT("Exercise 4 undelayed: not complete"), EvaluateTutorialObjectives(Fixture, Early.History).bComplete);
+	}
+
+	// Step 3, the delay (baseline 2.25 s): the move happens at ~0.555, inside the yellow spotlight.
 	AHueTutorialBuilder::InstallSolution(Fixture.Board, Layout);
 	FLogicRun Solved;
 	UTEST_TRUE(TEXT("Solved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Solved));
-	ExpectHistory(*this, TEXT("Exercise 4 solved"), Solved.History, { MakeEvent(2.25f, EHueColor::A) });
+	ExpectHistory(*this, TEXT("Exercise 4 solved"), Solved.History, { MakeEvent(1.0f, EHueColor::A), MakeEvent(3.25f, EHueColor::Y) });
+	TestEqual(FString::Printf(TEXT("Exercise 4 solved: no warnings. Log: %s"), *DescribeFeedback(Solved.Feedback)),
+		CountFeedbackOfKind(Solved.Feedback, EHueFeedbackKind::Warning) + CountFeedbackOfKind(Solved.Feedback, EHueFeedbackKind::Error), 0);
 	const FObjectiveRun Objectives = EvaluateTutorialObjectives(Fixture, Solved.History);
-	TestTrue(TEXT("Exercise 4 solved: pushed past the halfway marker"), Objectives.bComplete);
-	AddInfo(FString::Printf(TEXT("Exercise 4: history [%s], objectives complete at %.2f s, max fraction %.3f"),
-		*DescribeHistory(Solved.History), Objectives.CompletedAt, Objectives.Prediction.MaxFraction));
+	TestTrue(TEXT("Exercise 4 solved: the yellow move in the yellow spotlight"), Objectives.bComplete);
+	AddInfo(FString::Printf(TEXT("Exercise 4: history [%s], move at %.3f, objectives complete at %.2f s"),
+		*DescribeHistory(Solved.History), KeyMoveFraction(Solved.History), Objectives.CompletedAt));
 
-	// Delay window: 0.5 s lands in the very instant the brick breaks (still blocked); 0.75 s is the shortest that works.
+	// The timing window: every delay setting, which ones put the move in the spotlight. Exactly 2.25 s and 2.50 s.
 	AHueDelayBlock* Delay = Cast<AHueDelayBlock>(Fixture.Board->GetBlockAt(DelaySpec->Cell));
 	UTEST_NOT_NULL(TEXT("Solution delay installed"), Delay);
-	Delay->SetDelaySeconds(0.5f);
+	TArray<FString> Working;
+	TArray<FString> Positions;
+	const int32 MaxSteps = FMath::RoundToInt(AHueDelayBlock::MaxDelay / AHueDelayBlock::DelayStep);
+	for (int32 Steps = 0; Steps <= MaxSteps; ++Steps)
 	{
-		FLogicRun SameInstant;
-		UTEST_TRUE(TEXT("0.5 s run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, SameInstant));
-		ExpectHistory(*this, TEXT("Exercise 4, delay 0.5 s"), SameInstant.History, {});
+		const float Seconds = Steps * AHueDelayBlock::DelayStep;
+		Delay->SetDelaySeconds(Seconds);
+		FLogicRun Run;
+		UTEST_TRUE(FString::Printf(TEXT("Delay %.2f s run"), Seconds), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Run));
+		Positions.Add(FString::Printf(TEXT("%.2f->%.3f"), Seconds, KeyMoveFraction(Run.History)));
+		if (EvaluateTutorialObjectives(Fixture, Run.History).bComplete)
+		{
+			Working.Add(FString::Printf(TEXT("%.2f"), Seconds));
+		}
 	}
-	Delay->SetDelaySeconds(0.75f);
-	{
-		FLogicRun Shortest;
-		UTEST_TRUE(TEXT("0.75 s run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Shortest));
-		ExpectHistory(*this, TEXT("Exercise 4, delay 0.75 s"), Shortest.History, { MakeEvent(2.0f, EHueColor::A) });
-		TestTrue(TEXT("Exercise 4, delay 0.75 s: complete"), EvaluateTutorialObjectives(Fixture, Shortest.History).bComplete);
-	}
+	AddInfo(FString::Printf(TEXT("Exercise 4 delay sweep (delay -> move position): %s"), *FString::Join(Positions, TEXT(" "))));
+	TestEqual(TEXT("Exercise 4: the delays that work"), FString::Join(Working, TEXT(" ")), FString(TEXT("2.25 2.50")));
 	return true;
 }
 

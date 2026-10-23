@@ -648,6 +648,32 @@ void AHueBoard::TickObjectives(float DeltaSeconds)
 	const int32 Before = CurrentObjective;
 	EvaluateObjectives(Sample, DeltaSeconds);
 
+	if (Sample.bKeyAction)
+	{
+		// Every move is reported where it happened, so a missed timing reads as "too early / too late" on its own.
+		if (IsValid(Rig))
+		{
+			Rig->ClearKeyAction();
+		}
+		const FHueObjective* Waiting = Objectives.IsValidIndex(Before) ? &Objectives[Before] : nullptr;
+		const bool bCounted = CurrentObjective > Before && Waiting && Waiting->Type == EHueObjectiveType::KeyActionInZone;
+		FString Message = FString::Printf(TEXT("%s: %s move at %.0f%% of the track"),
+			IsValid(Rig) ? *Rig->GetPerformerName() : TEXT("Performer"), HueColor::Label(Sample.KeyActionColor),
+			Sample.KeyActionFraction * 100.f);
+		EHueFeedbackKind Kind = EHueFeedbackKind::Info;
+		if (!bCounted && Waiting && Waiting->Type == EHueObjectiveType::KeyActionInZone && Waiting->Color == Sample.KeyActionColor)
+		{
+			Kind = EHueFeedbackKind::Warning;
+			Message += FString::Printf(TEXT(" - %s, the %s spotlight is %.0f-%.0f%%"),
+				Sample.KeyActionFraction < Waiting->ZoneMin ? TEXT("too early") : TEXT("too late"),
+				HueColor::Name(Waiting->Color), Waiting->ZoneMin * 100.f, Waiting->ZoneMax * 100.f);
+		}
+		if (AExhibitManager* Manager = AExhibitManager::Get(this))
+		{
+			Manager->PushFeedback(Kind, Message, this);
+		}
+	}
+
 	for (int32 Index = Before; Index < CurrentObjective && Objectives.IsValidIndex(Index); ++Index)
 	{
 		const FString Message = FString::Printf(TEXT("Objective %d/%d done: %s"), Index + 1, Objectives.Num(), *Objectives[Index].Description);
@@ -709,6 +735,12 @@ bool AHueBoard::EvaluateObjectives(const FHueRigSample& Sample, float DeltaSecon
 		}
 		break;
 	}
+
+	case EHueObjectiveType::KeyActionInZone:
+		// Where the move happened counts, not where the performer is by the time the board samples it.
+		bDone = Sample.bKeyAction && Sample.KeyActionColor == Objective.Color
+			&& Sample.KeyActionFraction >= Objective.ZoneMin && Sample.KeyActionFraction <= Objective.ZoneMax;
+		break;
 
 	default:
 		break;

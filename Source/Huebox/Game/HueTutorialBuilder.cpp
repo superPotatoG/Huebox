@@ -399,8 +399,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(3,
 			TEXT("4 · Colour Key"),
-			TEXT("A yellow board stands on the dancer's track. When yellow light (Y) reaches her she does her yellow move, ")
-			TEXT("which breaks the board from the yellow strike zone in front of it - too early she misses, too late she runs ")
+			TEXT("A pane of yellow glass stands on the dancer's track. When yellow light (Y) reaches her she strikes, which ")
+			TEXT("shatters the glass from the yellow strike zone in front of it - too early she misses, too late she runs ")
 			TEXT("into it. {Supply}. 1) BRICK B blocks the push and only B breaks it: turn the spare B into it. 2) Light adds ")
 			TEXT("up: A + G = Y - mix where they meet. 3) Delay the Y until she is in the strike zone.")));
 
@@ -425,21 +425,22 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakePickup(EHueModuleType::Delay, 1, 420.f, 720.f),
 		};
 
-		FHueObjective YellowBoard = MakeObjective(EHueObjectiveType::BreakBoard, TEXT("Break the yellow board"));
+		FHueObjective YellowBoard = MakeObjective(EHueObjectiveType::BreakBoard, TEXT("Break the yellow glass"));
 		YellowBoard.Color = EHueColor::Y;
-		// The strike has to land on the board, so the zone sits right in front of it: the hit lands ~0.25 s after the move
-		// starts, ~0.075 of the track further on (cruise 3 m/s), and the board is 0.06 past the zone's end. One delay step
-		// moves the dancer 0.075, so the zone holds exactly one step: 2.50 s, centred in the prediction (0.63) and in real
-		// physics, which runs ~0.015 ahead (0.645); the neighbours 2.25 s / 2.75 s stay >= 0.025 outside either way.
-		YellowBoard.ZoneMin = 0.60f;
-		YellowBoard.ZoneMax = 0.68f;
-		YellowBoard.TrackFraction = 0.74f;
+		// Three delay steps work: 2.50 s and one step either side (one step moves the dancer 0.075 at cruise 3 m/s). The
+		// zone holds the moves of 2.25 / 2.50 / 2.75 s both in the prediction (0.555 / 0.63 / 0.705) and in real physics,
+		// which runs ~0.015 ahead (0.57 / 0.645 / 0.72); 2.00 s (0.48 / 0.495) and 3.00 s (0.78 / 0.795) stay >= 0.025
+		// outside. The glass stands where a strike from the zone's far end lands (~0.075 on); a strike from further back
+		// cracks it, and it bursts as she gets there.
+		YellowBoard.ZoneMin = 0.52f;
+		YellowBoard.ZoneMax = 0.745f;
+		YellowBoard.TrackFraction = 0.80f;
 		Layout.Objectives = { YellowBoard };
 
 		// T(3,4) South [S+E]: the spare B turns South and breaks K at 0.50 s; the push passes at 0.75 s, R turns A at
 		// 1.00 s and the dancer runs (cruise 3 m/s = 0.075 of the track per 0.25 s). M(4,1) North: Y leaves at 0.50 s,
-		// D(4,2) North holds it, R gets it at 1.00 s + delay. Delay 2.50 s -> move at ~0.63, in the strike zone; 2.25 s
-		// (~0.555) misses and she runs into the board, 2.75 s (~0.705) is too late.
+		// D(4,2) North holds it, R gets it at 1.00 s + delay. Delay 2.50 s -> move at ~0.63, in the strike zone (2.25 s and
+		// 2.75 s too); 2.00 s misses and she runs into the glass, 3.00 s is too late.
 		Layout.SolutionBlocks = {
 			MakeBlock(EHueBlockKind::Turn, 3, 4, EHueDir::South, true),
 			MakeBlock(EHueBlockKind::Mixer, 4, 1, EHueDir::North, true),

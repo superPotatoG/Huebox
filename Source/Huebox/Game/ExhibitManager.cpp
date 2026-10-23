@@ -266,7 +266,7 @@ void AExhibitManager::Tick(float DeltaSeconds)
 		else if (IsValid(Rig) && Rig->HasCrashed())
 		{
 			// Running into an unbroken stage board fails the attempt at once (no waiting for the time limit).
-			HandleRunFailed(FString::Printf(TEXT("The %s ran into the %s board before breaking it"),
+			HandleRunFailed(FString::Printf(TEXT("The %s ran into the %s glass before breaking it"),
 				*Rig->GetPerformerName().ToLower(), HueColor::Name(Rig->GetCrashBoardColor())));
 		}
 		else if (GetRunTimeSeconds() >= Board->RunTimeLimitSeconds)

@@ -2310,8 +2310,8 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 	AddInfo(FString::Printf(TEXT("Exercise 4: history [%s], move at %.3f, objectives complete at %.2f s"),
 		*DescribeHistory(Solved.History), KeyMoveFraction(Solved.History), Objectives.CompletedAt));
 
-	// The timing window: every delay setting, which ones break the board. Exactly 2.50 s (the strike has to land on the
-	// board, so the zone holds one 0.25 s step); every other one ends with the dancer running into it.
+	// The timing window: every delay setting, which ones break the glass. Exactly 2.50 s and one step either side;
+	// every other one ends with the dancer running into it.
 	AHueDelayBlock* Delay = Cast<AHueDelayBlock>(Fixture.Board->GetBlockAt(DelaySpec->Cell));
 	UTEST_NOT_NULL(TEXT("Solution delay installed"), Delay);
 	TArray<FString> Working;
@@ -2333,7 +2333,7 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 		}
 	}
 	AddInfo(FString::Printf(TEXT("Exercise 4 delay sweep (delay -> move position): %s"), *FString::Join(Positions, TEXT(" "))));
-	TestEqual(TEXT("Exercise 4: the delays that work"), FString::Join(Working, TEXT(" ")), FString(TEXT("2.50")));
+	TestEqual(TEXT("Exercise 4: the delays that work"), FString::Join(Working, TEXT(" ")), FString(TEXT("2.25 2.50 2.75")));
 	return true;
 }
 

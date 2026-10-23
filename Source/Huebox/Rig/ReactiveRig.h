@@ -254,11 +254,27 @@ protected:
 		float ContactFraction = 1.f;
 		float StrikeMin = 0.f;
 		float StrikeMax = 0.f;
+		/** Rules: a valid strike happened, the way is open. */
 		bool bBroken = false;
-		/** Seconds until the panel disappears after a hit (the move's hit lands a moment after it starts); < 0 = none. */
-		float HideTimeLeft = -1.f;
+		// Presentation of a broken board: the hit lands a moment after the move starts (HitTimeLeft); out of reach the
+		// glass cracks (glows) and bursts when the performer gets to it, within reach it shatters at once.
+		float HitTimeLeft = 0.f;
+		bool bCracked = false;
+		bool bShattered = false;
 	};
 	TArray<FStageBoard> StageBoards;
+
+	/** Flying glass of shattered boards: the components (owned here) and their motion (plain data, same index). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UStaticMeshComponent>> ShardMeshes;
+	struct FShardMotion
+	{
+		FVector Velocity = FVector::ZeroVector;	// rig-local cm/s
+		FRotator Spin = FRotator::ZeroRotator;	// degrees/s
+		float Age = 0.f;
+		FVector BaseScale = FVector::OneVector;
+	};
+	TArray<FShardMotion> ShardMotions;
 
 	/** The board panels (hidden once broken) and the glow of their strike zones (lit when broken). Also held by the
 	 *  marker arrays; these UPROPERTY lists just keep the per-board handles. */
@@ -303,8 +319,13 @@ private:
 	FLinearColor StrikeZoneColor(EHueColor KeyColor, bool bLit) const;
 	/** Every board back up, panels visible, zones dim (reset). */
 	void RestoreStageBoards();
-	/** Hides the panels whose hit delay ran out. */
+	/** Lands the hits of broken boards: crack (out of reach) or shatter (within reach / reached). */
 	void UpdateStageBoards(float DeltaSeconds);
+	/** Hides board Index and sends its glass flying (shards). */
+	void ShatterStageBoard(int32 Index);
+	/** Moves the flying shards (simple ballistic motion, settling on the stage floor) and removes old ones. */
+	void UpdateShards(float DeltaSeconds);
+	void ClearShards();
 	/** Stops the performer at an unbroken board it reached this frame, if any (physics side of the crash). */
 	void CheckStageBoardContact();
 	void ClearMoveMarks();

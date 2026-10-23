@@ -72,7 +72,7 @@ Space ─▶ AExhibitManager（Build/Running/Paused/Ended/Complete 状态机）
   - **混合器**（`HueColor::Mix`）：两种颜色没有共同原色时相加（按位或），例如 A + B = N、A + G = Y；有共同原色就失败（A + A、任何颜色 + N、A + Y）。原来的“A + B → N”只是其中一种情况。
   - **变色块**（`HueColor::Shift`）：变成互补色（按位取反），A ↔ B、G ↔ M、Y ↔ V；N 不变。
   - **只有 A / B / N 改变舞者的运动**（`HueColor::DrivesRig`）。其他颜色是“钥匙”：到达接收器后不参与同一时刻的冲突判定，而是在这一时刻结束时交给舞者（`AReactiveRig::PerformKeyAction`），她当场做这个颜色的动作。动作只是皮肤里的一段动画（`PerformerKeyActionAnim`），物理不受影响。
-  - **舞台板子**（目标 `BreakBoard`）：舞者的 Tick 和 `PredictMotion` 里都把没打碎的板子当作一道挡板；跑到接触线就停下、播放倒地动画，`HasCrashed()` 变为真，`AExhibitManager` 立即判这一轮失败（`HandleRunFailed`）。钥匙动作只有发生在出拳区（例如 60–68%）时才会打碎同色板子。舞者记录出拳时的位置，`MakeSample` 把它带给棋盘做判定。测试用 `PredictMotion` 离线扫描每个延迟值：会打碎板子，还是撞上去。
+  - **舞台板子**（目标 `BreakBoard`）：舞者的 Tick 和 `PredictMotion` 里都把没打碎的板子当作一道挡板；跑到接触线就停下、播放倒地动画，`HasCrashed()` 变为真，`AExhibitManager` 立即判这一轮失败（`HandleRunFailed`）。钥匙动作只有发生在出拳区（例如 52–74%）时才会打碎同色板子（玻璃）。碎裂只是表现：打中后离得远就先“裂开”，跑到跟前再“碎开”。碎片是运行时用 `NewObject` 创建的方块组件，由 `UPROPERTY` 数组 `ShardMeshes` 持有（GC 不会回收），运动数据放在并行的普通数组里，每帧手动积分（不用物理引擎，结果确定）；寿命到了或重置时 `DestroyComponent`。舞者记录出拳时的位置，`MakeSample` 把它带给棋盘做判定。测试用 `PredictMotion` 离线扫描每个延迟值：会打碎板子，还是撞上去。
 - **砖**（`AHueBrickBlock`）：只有同色的光能打碎，打碎它的那束光会被用掉；其他颜色被挡住。打碎在“同一时刻组”结束时（`OnTimeGroupEnd`）才生效，所以同一毫秒到达的其他脉冲仍会被挡，结果与事件队列的处理顺序无关。重置后恢复原样。
 - **颜色 → 物理**：A 同色相斥，B 异色相吸，均为 `AddForce(..., bAccelChange=true)` 并限速；N 关闭颜色力并把阻尼调高，逐渐刹停。小车用 SixDOF 锁住 Y/Z 平移和全部旋转，只能沿轨道运动。
 - **限制**：最多 16 个活跃信号；每个信号最多 64 次模块操作，超过就判定为循环并终止；每次运行最长 20 s。

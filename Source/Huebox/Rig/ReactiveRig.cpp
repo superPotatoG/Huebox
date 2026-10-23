@@ -79,6 +79,19 @@ namespace HueRigPrivate
 	constexpr float BoardLetterSize = 48.f;
 	/** How far a figure riding without the carriage box reaches ahead of its centre (cm). */
 	constexpr float PerformerFrontOffset = 15.f;
+	/** A landed strike shatters the glass when the performer's centre is this close to the contact line (cm); from
+	 *  further away it only cracks, and bursts when she gets there. */
+	constexpr float ShatterReach = 60.f;
+	/** Glow of cracked glass and of the flying pieces. */
+	constexpr float CrackedGlow = 5.f;
+	/** Shards: a ShardColumns (across the track) x ShardRows grid of pieces, thrown forward and falling. */
+	constexpr int32 ShardColumns = 4;
+	constexpr int32 ShardRows = 7;
+	constexpr float ShardSpeedMin = 150.f;
+	constexpr float ShardSpeedMax = 380.f;
+	constexpr float ShardGravity = 980.f;
+	constexpr float ShardLifeSeconds = 1.6f;
+	constexpr float ShardFadeSeconds = 0.5f;
 	/** Marks where key moves happened: short posts on the viewer side of the track. */
 	constexpr float MoveMarkHeight = 30.f;
 	constexpr float MoveMarkGlow = 2.f;
@@ -348,6 +361,7 @@ void AReactiveRig::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	UpdateStageBoards(DeltaSeconds);
+	UpdateShards(DeltaSeconds);
 	UpdatePerformer(DeltaSeconds);
 
 	if (!bMotionActive || bMotionPaused || !IsValid(Carriage) || !Carriage->IsSimulatingPhysics())
@@ -425,7 +439,7 @@ void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 		if (!Board.bBroken && Board.Color == KeyColor && Fraction >= Board.StrikeMin && Fraction <= Board.StrikeMax)
 		{
 			Board.bBroken = true;
-			Board.HideTimeLeft = KeyActionHitSeconds;
+			Board.HitTimeLeft = KeyActionHitSeconds;
 			if (StageBoardGlowMIDs.IsValidIndex(Index) && StageBoardGlowMIDs[Index])
 			{
 				StageBoardGlowMIDs[Index]->SetVectorParameterValue(TEXT("Color"), StrikeZoneColor(KeyColor, /*bLit*/ true));
@@ -466,14 +480,21 @@ FLinearColor AReactiveRig::StrikeZoneColor(EHueColor KeyColor, bool bLit) const
 
 void AReactiveRig::RestoreStageBoards()
 {
+	ClearShards();
 	for (int32 Index = 0; Index < StageBoards.Num(); ++Index)
 	{
 		FStageBoard& Board = StageBoards[Index];
 		Board.bBroken = false;
-		Board.HideTimeLeft = -1.f;
-		if (StageBoardMeshes.IsValidIndex(Index) && StageBoardMeshes[Index])
+		Board.HitTimeLeft = 0.f;
+		Board.bCracked = false;
+		Board.bShattered = false;
+		if (UStaticMeshComponent* Panel = StageBoardMeshes.IsValidIndex(Index) ? StageBoardMeshes[Index].Get() : nullptr)
 		{
-			StageBoardMeshes[Index]->SetVisibility(true);
+			Panel->SetVisibility(true);
+			if (UMaterialInstanceDynamic* PanelMID = Cast<UMaterialInstanceDynamic>(Panel->GetMaterial(0)))
+			{
+				PanelMID->SetVectorParameterValue(TEXT("Color"), HueColor::ToLinear(Board.Color) * HueRigPrivate::BoardGlow);
+			}
 		}
 		if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
 		{
@@ -488,30 +509,143 @@ void AReactiveRig::RestoreStageBoards()
 
 void AReactiveRig::UpdateStageBoards(float DeltaSeconds)
 {
-	const float Fraction = StageBoards.Num() > 0 ? GetCarriageFraction() : 0.f;
+	if (StageBoards.Num() == 0 || TrackLength <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	const float Fraction = GetCarriageFraction();
+	const float Reach = HueRigPrivate::ShatterReach / TrackLength;
 	for (int32 Index = 0; Index < StageBoards.Num(); ++Index)
 	{
 		FStageBoard& Board = StageBoards[Index];
-		if (Board.HideTimeLeft < 0.f)
+		if (!Board.bBroken || Board.bShattered)
 		{
 			continue;
 		}
-		Board.HideTimeLeft -= FMath::Max(DeltaSeconds, 0.f);
-		// The panel goes when the hit lands - or when she reaches it first (a strike from the end of the zone bursts
-		// through), so she never runs into a board that is already broken.
-		if (Board.HideTimeLeft <= 0.f || Fraction >= Board.ContactFraction)
+		Board.HitTimeLeft = FMath::Max(0.f, Board.HitTimeLeft - FMath::Max(DeltaSeconds, 0.f));
+		const bool bHitLanded = Board.HitTimeLeft <= 0.f;
+		const bool bWithinReach = Fraction >= Board.ContactFraction - Reach;
+
+		// Shatter once the hit has landed within reach - or as she gets to the glass (a strike from further away
+		// cracked it; reaching the contact line always bursts it, so she never runs into a broken board).
+		if ((bHitLanded && bWithinReach) || Fraction >= Board.ContactFraction || (Board.bCracked && bWithinReach))
 		{
-			Board.HideTimeLeft = -1.f;
-			if (StageBoardMeshes.IsValidIndex(Index) && StageBoardMeshes[Index])
+			ShatterStageBoard(Index);
+		}
+		else if (bHitLanded && !Board.bCracked)
+		{
+			Board.bCracked = true;
+			UStaticMeshComponent* Panel = StageBoardMeshes.IsValidIndex(Index) ? StageBoardMeshes[Index].Get() : nullptr;
+			if (UMaterialInstanceDynamic* PanelMID = Panel ? Cast<UMaterialInstanceDynamic>(Panel->GetMaterial(0)) : nullptr)
 			{
-				StageBoardMeshes[Index]->SetVisibility(false);
-			}
-			if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
-			{
-				StageBoardLabels[Index]->SetVisibility(false);
+				PanelMID->SetVectorParameterValue(TEXT("Color"), HueColor::ToLinear(Board.Color) * HueRigPrivate::CrackedGlow);
 			}
 		}
 	}
+}
+
+void AReactiveRig::ShatterStageBoard(int32 Index)
+{
+	using namespace HueRigPrivate;
+
+	FStageBoard& Board = StageBoards[Index];
+	Board.bShattered = true;
+	UStaticMeshComponent* Panel = StageBoardMeshes.IsValidIndex(Index) ? StageBoardMeshes[Index].Get() : nullptr;
+	if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
+	{
+		StageBoardLabels[Index]->SetVisibility(false);
+	}
+	if (!IsValid(Panel))
+	{
+		return;
+	}
+	Panel->SetVisibility(false);
+
+	// The pane breaks into a grid of pieces (across the track x up), thrown forward - the way she is running - and
+	// falling. A fixed seed per board: the same strike always shatters the same way.
+	const FVector Center = Panel->GetRelativeLocation();
+	const FLinearColor Color = HueColor::ToLinear(Board.Color) * CrackedGlow;
+	const float PieceDepth = BoardDepth / ShardColumns;
+	const float PieceHeight = BoardHeight / ShardRows;
+	FRandomStream Random(1234 + Index);
+	for (int32 Row = 0; Row < ShardRows; ++Row)
+	{
+		for (int32 Column = 0; Column < ShardColumns; ++Column)
+		{
+			const FVector Offset(0.f, (Column + 0.5f) * PieceDepth - BoardDepth * 0.5f, (Row + 0.5f) * PieceHeight - BoardHeight * 0.5f);
+			const float Size = Random.FRandRange(0.55f, 0.9f);
+			const FVector Scale(BoardThickness / 100.f, PieceDepth * Size / 100.f, PieceHeight * Size / 100.f);
+			AddMarkerMesh(Center + Offset, Scale, Color, nullptr, /*bFlat*/ true,
+				FRotator(Random.FRandRange(-20.f, 20.f), 0.f, Random.FRandRange(-20.f, 20.f)), &ShardMeshes);
+
+			FShardMotion Motion;
+			Motion.BaseScale = Scale;
+			Motion.Velocity = FVector(Random.FRandRange(ShardSpeedMin, ShardSpeedMax), Offset.Y * Random.FRandRange(1.5f, 3.f),
+				Random.FRandRange(40.f, 220.f) + Offset.Z * 0.8f);
+			Motion.Spin = FRotator(Random.FRandRange(-540.f, 540.f), Random.FRandRange(-360.f, 360.f), Random.FRandRange(-540.f, 540.f));
+			ShardMotions.Add(Motion);
+		}
+	}
+}
+
+void AReactiveRig::UpdateShards(float DeltaSeconds)
+{
+	using namespace HueRigPrivate;
+
+	if (ShardMeshes.Num() == 0)
+	{
+		return;
+	}
+	const float Dt = FMath::Max(DeltaSeconds, 0.f);
+	bool bAllDone = true;
+	for (int32 Index = 0; Index < ShardMeshes.Num() && Index < ShardMotions.Num(); ++Index)
+	{
+		UStaticMeshComponent* Shard = ShardMeshes[Index];
+		FShardMotion& Motion = ShardMotions[Index];
+		if (!IsValid(Shard) || Motion.Age >= ShardLifeSeconds)
+		{
+			continue;
+		}
+		bAllDone = false;
+		Motion.Age += Dt;
+
+		// Ballistic flight; on the stage floor the pieces stop sliding and spinning.
+		Motion.Velocity.Z -= ShardGravity * Dt;
+		FVector Location = Shard->GetRelativeLocation() + Motion.Velocity * Dt;
+		const float FloorZ = TrackHeight + Motion.BaseScale.X * 50.f;
+		if (Location.Z <= FloorZ)
+		{
+			Location.Z = FloorZ;
+			Motion.Velocity = FVector::ZeroVector;
+			Motion.Spin = FRotator::ZeroRotator;
+		}
+		Shard->SetRelativeLocationAndRotation(Location, Shard->GetRelativeRotation() + Motion.Spin * Dt);
+
+		// The last part of their life they shrink away.
+		const float Fade = FMath::Clamp((ShardLifeSeconds - Motion.Age) / ShardFadeSeconds, 0.f, 1.f);
+		Shard->SetRelativeScale3D(Motion.BaseScale * FMath::Max(Fade, 0.01f));
+		if (Motion.Age >= ShardLifeSeconds)
+		{
+			Shard->SetVisibility(false);
+		}
+	}
+	if (bAllDone)
+	{
+		ClearShards();
+	}
+}
+
+void AReactiveRig::ClearShards()
+{
+	for (UStaticMeshComponent* Shard : ShardMeshes)
+	{
+		if (IsValid(Shard))
+		{
+			Shard->DestroyComponent();
+		}
+	}
+	ShardMeshes.Reset();
+	ShardMotions.Reset();
 }
 
 void AReactiveRig::CheckStageBoardContact()
@@ -556,7 +690,7 @@ void AReactiveRig::CheckStageBoardContact()
 		const FLinearColor Color = HueColor::ToLinear(Board.Color);
 		if (StateLabel)
 		{
-			StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: hit the %s board"), *GetPerformerName(), HueColor::Label(Board.Color))));
+			StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: hit the %s glass"), *GetPerformerName(), HueColor::Label(Board.Color))));
 			StateLabel->SetTextRenderColor(Color.ToFColor(true));
 		}
 		break;
@@ -1417,6 +1551,7 @@ void AReactiveRig::ClearObjectiveMarkers()
 		}
 	}
 	MarkerComponents.Reset();
+	ClearShards();
 	StageBoards.Reset();
 	StageBoardMeshes.Reset();
 	StageBoardLabels.Reset();

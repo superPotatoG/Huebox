@@ -664,7 +664,7 @@ void AHueBoard::TickObjectives(float DeltaSeconds)
 		EHueFeedbackKind Kind = EHueFeedbackKind::Info;
 		if (bCounted)
 		{
-			Message += FString::Printf(TEXT(" - the %s board breaks"), HueColor::Name(Waiting->Color));
+			Message += FString::Printf(TEXT(" - the %s glass breaks"), HueColor::Name(Waiting->Color));
 		}
 		else if (bForBoard && !Sample.bCrashed)
 		{

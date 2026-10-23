@@ -850,7 +850,7 @@ void AHueboxHUD::DrawBoardPanel(const APawn* Pawn, AExhibitManager* Manager, EHu
 				}
 				else if (Objective.Type == EHueObjectiveType::BreakBoard)
 				{
-					Text += FString::Printf(TEXT(" (%s from %.0f-%.0f%%, board at %.0f%%)"), HueColor::Label(Objective.Color),
+					Text += FString::Printf(TEXT(" (%s from %.0f-%.0f%%, glass at %.0f%%)"), HueColor::Label(Objective.Color),
 						Objective.ZoneMin * 100.f, Objective.ZoneMax * 100.f, Objective.TrackFraction * 100.f);
 				}
 				HueHUD::AddWrapped(*this, Lines, Text, HueHUD::AmberColor, ContentWidth, S);

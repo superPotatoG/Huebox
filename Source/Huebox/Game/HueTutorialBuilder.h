@@ -48,6 +48,10 @@ struct FHueBlockSpec
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	EHueColor SourceColor = EHueColor::B;
 
+	/** Source only: faces that each emit one pulse (a source base). Empty = the facing only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
+	TArray<EHueDir> SourceFaces;
+
 	/** Delay only. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Layout")
 	float DelaySeconds = 0.0f;
@@ -127,8 +131,9 @@ struct FHueBoardLayout
 /**
  * Builds the Level 1 "prototype table" at BeginPlay from data: four exercise boards (GDD 4: route a signal,
  * change motion, synthesize a stop; plus the colour key: open a blue brick, mix a Y and time it to break the yellow board on stage), their rigs, their module supply (Instruction mode: the board's tray; Sandbox mode:
- * floor pickups), titles, and - if the level has none - a ground slab and lights. Layouts are plain USTRUCT data so
- * designers can edit them in the details panel.
+ * floor pickups), titles, and - if the level has none - a ground slab and lights. A fifth board east of them is the
+ * Level 2 sample (8 x 8, source base with four outputs) until Level 2 gets its own map. Layouts are plain USTRUCT
+ * data so designers can edit them in the details panel.
  */
 UCLASS()
 class HUEBOX_API AHueTutorialBuilder : public AActor
@@ -138,7 +143,7 @@ class HUEBOX_API AHueTutorialBuilder : public AActor
 public:
 	AHueTutorialBuilder();
 
-	/** The tutorial exercises: the three of the GDD, then the colour key. */
+	/** The tutorial exercises (the three of the GDD, then the colour key), then the Level 2 sample. */
 	static void MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& OutLayouts);
 
 	/** Spawns one block from a spec on Board (handles kind -> class, colour, delay, receiver faces, rig link). */

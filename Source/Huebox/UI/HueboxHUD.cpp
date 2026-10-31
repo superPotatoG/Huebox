@@ -797,14 +797,15 @@ void AHueboxHUD::DrawBoardPanel(const APawn* Pawn, AExhibitManager* Manager, EHu
 		break;
 	}
 
-	// Instruction progression: which exercise of how many (boards are kept in progression order).
+	// Instruction progression: which board of how many (boards are kept in progression order; the Level 2 sample shares
+	// the table with the exercises for now, so "board", not "exercise").
 	if (Context == EHudContext::Build && Manager)
 	{
 		const int32 Index = Manager->GetBoards().IndexOfByKey(Board);
 		const int32 Count = Manager->GetBoards().Num();
 		if (Index != INDEX_NONE && Count > 1)
 		{
-			HueHUD::AddLine(Lines, FString::Printf(TEXT("Exercise %d of %d    Tab / ]: next    [: previous"), Index + 1, Count), HueHUD::DimColor);
+			HueHUD::AddLine(Lines, FString::Printf(TEXT("Board %d of %d    Tab / ]: next    [: previous"), Index + 1, Count), HueHUD::DimColor);
 		}
 	}
 

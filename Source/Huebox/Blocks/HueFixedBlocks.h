@@ -26,12 +26,26 @@ public:
 	EHueColor GetEmitColor() const { return EmitColor; }
 	void SetEmitColor(EHueColor InColor);
 
-	/** Called by the subsystem when it emits this source's pulse. */
+	/** Faces that emit one pulse each at t = 0 (board-local). Empty = the facing only. Several make a source base
+	 *  (GDD 4: one base with four B outputs in Level 2). */
+	void SetEmitFaces(const TArray<EHueDir>& Faces);
+	/** The faces that emit, in emission order (never empty). */
+	void GetEmitFaces(TArray<EHueDir>& OutFaces) const;
+	bool IsMultiOutput() const { return EmitFaces.Num() > 1; }
+
+	/** Called by the subsystem after it emitted this source's pulses (one per emit face). */
 	void NotifyEmitted(int64 TimeMs);
 
 protected:
 	UPROPERTY(EditAnywhere, Category = "Hue|Source")
 	EHueColor EmitColor = EHueColor::B;
+
+	UPROPERTY(EditAnywhere, Category = "Hue|Source")
+	TArray<EHueDir> EmitFaces;
+
+private:
+	/** "E N W S" (or the facing). */
+	FString DescribeEmitFaces() const;
 };
 
 /**

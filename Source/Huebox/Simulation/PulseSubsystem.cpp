@@ -145,19 +145,31 @@ bool UPulseSubsystem::StartRun(AHueBoard* Board)
 		return CellA.Y != CellB.Y ? CellA.Y < CellB.Y : CellA.X < CellB.X;
 	});
 
+	// One pulse per emit face (a source base has several), in the source's face order.
 	int32 Emitted = 0;
+	int32 Outputs = 0;
+	TArray<EHueDir> Faces;
 	for (AHueSourceBlock* Source : Sources)
 	{
-		const int32 PulseId = EmitPulse(Source->GetEmitColor(), Source->GetCell(), Source->GetFacing(), 0, MaxOpsPerSignal);
-		if (PulseId != INDEX_NONE)
+		Source->GetEmitFaces(Faces);
+		bool bAny = false;
+		for (const EHueDir Face : Faces)
+		{
+			++Outputs;
+			if (EmitPulse(Source->GetEmitColor(), Source->GetCell(), Face, 0, MaxOpsPerSignal) != INDEX_NONE)
+			{
+				++Emitted;
+				bAny = true;
+			}
+		}
+		if (bAny)
 		{
 			Source->NotifyEmitted(0);
-			++Emitted;
 		}
 	}
 
-	UE_LOG(LogHuebox, Log, TEXT("Pulse run started on '%s': %d of %d sources emitted (step %.3f s, mix window %.3f s, cap %d, ops %d)."),
-		*Board->GetBoardName(), Emitted, Sources.Num(), HueTime::MsToSeconds(StepMs), HueTime::MsToSeconds(MixWindowMs),
+	UE_LOG(LogHuebox, Log, TEXT("Pulse run started on '%s': %d of %d source output(s) emitted (step %.3f s, mix window %.3f s, cap %d, ops %d)."),
+		*Board->GetBoardName(), Emitted, Outputs, HueTime::MsToSeconds(StepMs), HueTime::MsToSeconds(MixWindowMs),
 		MaxActiveSignals, MaxOpsPerSignal);
 	return true;
 }

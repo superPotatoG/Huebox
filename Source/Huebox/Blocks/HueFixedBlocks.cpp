@@ -36,23 +36,72 @@ AHueSourceBlock::AHueSourceBlock()
 
 void AHueSourceBlock::GetPorts(TArray<FHuePort>& OutPorts) const
 {
-	FHuePort Out;
-	Out.Face = Facing;
-	Out.Kind = EHuePortKind::Output;
-	OutPorts.Add(Out);
+	TArray<EHueDir> Faces;
+	GetEmitFaces(Faces);
+	for (const EHueDir Face : Faces)
+	{
+		FHuePort Out;
+		Out.Face = Face;
+		Out.Kind = EHuePortKind::Output;
+		OutPorts.Add(Out);
+	}
 }
 
 FString AHueSourceBlock::GetRuleText() const
 {
+	if (IsMultiOutput())
+	{
+		return FString::Printf(TEXT("Source base: emits one %s pulse through each of its %d outputs (%s) when the run starts (t = 0). Blocks incoming pulses."),
+			HueColor::Label(EmitColor), EmitFaces.Num(), *DescribeEmitFaces());
+	}
 	return FString::Printf(TEXT("Emits one %s pulse travelling %s when the run starts (t = 0). Blocks incoming pulses."),
-		HueColor::Label(EmitColor), HueDir::ToString(Facing));
+		HueColor::Label(EmitColor), *DescribeEmitFaces());
+}
+
+void AHueSourceBlock::SetEmitFaces(const TArray<EHueDir>& Faces)
+{
+	// Unique faces, in the given order (that is the emission order).
+	EmitFaces.Reset();
+	for (const EHueDir Face : Faces)
+	{
+		EmitFaces.AddUnique(Face);
+	}
+	RebuildPortMarkers();
+	RefreshVisuals();
+}
+
+void AHueSourceBlock::GetEmitFaces(TArray<EHueDir>& OutFaces) const
+{
+	OutFaces.Reset();
+	if (EmitFaces.Num() == 0)
+	{
+		OutFaces.Add(Facing);
+	}
+	else
+	{
+		OutFaces.Append(EmitFaces);
+	}
+}
+
+FString AHueSourceBlock::DescribeEmitFaces() const
+{
+	TArray<EHueDir> Faces;
+	GetEmitFaces(Faces);
+	TArray<FString> Names;
+	for (const EHueDir Face : Faces)
+	{
+		Names.Add(HueDir::ToString(Face));
+	}
+	return FString::Join(Names, TEXT(" "));
 }
 
 FString AHueSourceBlock::GetStateText() const
 {
 	if (LastOutputText.IsEmpty())
 	{
-		return FString::Printf(TEXT("Ready: fires %s at t = 0"), HueColor::Label(EmitColor));
+		return IsMultiOutput()
+			? FString::Printf(TEXT("Ready: fires %d x %s at t = 0"), EmitFaces.Num(), HueColor::Label(EmitColor))
+			: FString::Printf(TEXT("Ready: fires %s at t = 0"), HueColor::Label(EmitColor));
 	}
 	return Super::GetStateText();
 }
@@ -60,7 +109,8 @@ FString AHueSourceBlock::GetStateText() const
 void AHueSourceBlock::RefreshVisuals()
 {
 	BaseColor = HueColor::ToLinear(EmitColor);
-	LabelString = FString::Printf(TEXT("SRC %s"), HueColor::Label(EmitColor));
+	// A base reads "BASE" (its output arrows on every face show how many); short enough for the tile font.
+	LabelString = FString::Printf(TEXT("%s %s"), IsMultiOutput() ? TEXT("BASE") : TEXT("SRC"), HueColor::Label(EmitColor));
 	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
@@ -73,6 +123,12 @@ void AHueSourceBlock::SetEmitColor(EHueColor InColor)
 
 void AHueSourceBlock::NotifyEmitted(int64 TimeMs)
 {
+	if (IsMultiOutput())
+	{
+		NoteOutput(FString::Printf(TEXT("out: %d x %s to %s @%.2fs"), EmitFaces.Num(), HueColor::Label(EmitColor),
+			*DescribeEmitFaces(), HueTime::MsToSeconds(TimeMs)));
+		return;
+	}
 	NoteOutput(FormatOutput(EmitColor, Facing, TimeMs));
 }
 

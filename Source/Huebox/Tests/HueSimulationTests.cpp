@@ -1164,6 +1164,51 @@ bool FHueboxSimStraightRouteTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxSimSourceBaseTest, "Huebox.Simulation.SourceBase", HUEBOX_TEST_FLAGS)
+bool FHueboxSimSourceBaseTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	FHueTestWorld TestWorld;
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem of the test world"), Sim);
+	Sim->SetVisualsEnabled(false);
+
+	// Base(2,2) fires B through all four faces at t = 0. R(5,2) (West face) is three cells east of it; the other three
+	// pulses run off the board after 3 (north, 6 x 6 grid), 2 (west) and 2 (south) cells.
+	AHueBoard* Board = TestWorld.SpawnBoard(FVector::ZeroVector, FIntPoint(6, 6));
+	UTEST_NOT_NULL(TEXT("Board"), Board);
+	AHueSourceBlock* Base = AddSource(*this, Board, FIntPoint(2, 2), EHueDir::East, EHueColor::B);
+	AHueReceiverBlock* Receiver = AddReceiver(*this, Board, FIntPoint(5, 2), { EHueDir::West });
+	UTEST_TRUE(TEXT("Scenario built"), Base != nullptr && Receiver != nullptr);
+	Base->SetEmitFaces({ EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South, EHueDir::East });
+
+	TArray<EHueDir> Faces;
+	Base->GetEmitFaces(Faces);
+	TestEqual(TEXT("Four unique emit faces"), Faces.Num(), 4);
+	TestTrue(TEXT("A base is a multi-output source"), Base->IsMultiOutput());
+	TArray<FHuePort> Ports;
+	Base->GetPorts(Ports);
+	TestEqual(TEXT("One output port per emit face"), Ports.FilterByPredicate([](const FHuePort& Port) { return Port.Kind == EHuePortKind::Output; }).Num(), 4);
+
+	UTEST_TRUE(TEXT("Run started"), StartBoardRun(Sim, Board));
+	TestEqual(TEXT("Four pulses in flight at t = 0"), Sim->GetTravelingPulseCount(), 4);
+
+	FSimClock Clock(Sim);
+	Clock.AdvanceTo(2.0);
+	ExpectHistory(*this, TEXT("Only the east pulse reaches the receiver"), Receiver->GetAppliedHistory(), { MakeEvent(0.75f, EHueColor::B) });
+	TestEqual(TEXT("Every pulse ended"), Sim->GetTravelingPulseCount(), 0);
+	TestEqual(TEXT("Three pulses left the board"), CountFeedback(Sim->GetRunFeedbackLog(), TEXT("left the board")), 3);
+
+	// A single-face source still fires through its facing only.
+	Base->SetEmitFaces({});
+	TestFalse(TEXT("No faces = the facing only"), Base->IsMultiOutput());
+	UTEST_TRUE(TEXT("Second run started"), StartBoardRun(Sim, Board));
+	TestEqual(TEXT("One pulse in flight"), Sim->GetTravelingPulseCount(), 1);
+	Sim->StopAndClear();
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxSimCrossingPulsesTest, "Huebox.Simulation.CrossingPulses", HUEBOX_TEST_FLAGS)
 bool FHueboxSimCrossingPulsesTest::RunTest(const FString& Parameters)
 {
@@ -2334,6 +2379,149 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 	}
 	AddInfo(FString::Printf(TEXT("Exercise 4 delay sweep (delay -> move position): %s"), *FString::Join(Positions, TEXT(" "))));
 	TestEqual(TEXT("Exercise 4: the delays that work"), FString::Join(Working, TEXT(" ")), FString(TEXT("2.25 2.50 2.75")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxLevel2SampleTest, "Huebox.Tutorial.Level2Sample", HUEBOX_TEST_FLAGS)
+bool FHueboxLevel2SampleTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	TArray<FHueBoardLayout> Layouts;
+	AHueTutorialBuilder::MakeDefaultTutorialLayouts(Layouts);
+	UTEST_TRUE(TEXT("Four exercises and the Level 2 sample"), Layouts.Num() >= 5);
+	const FHueBoardLayout& Layout = Layouts[4];
+	CheckTutorialLayoutData(*this, Layout);
+	TestEqual(TEXT("Level 2: 8 x 8 grid (GDD 4)"), Layout.GridSize, FIntPoint(8, 8));
+
+	FHueTestWorld TestWorld;
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem"), Sim);
+	Sim->SetVisualsEnabled(false);
+	FTutorialFixture Fixture;
+	UTEST_TRUE(TEXT("Level 2 spawned"), SpawnTutorialBoard(*this, TestWorld, Layout, Fixture));
+
+	// GDD 4: one source base with four B outputs.
+	int32 BaseOutputs = 0;
+	Fixture.Board->ForEachBlock([&BaseOutputs](APulseBlock& Block)
+	{
+		const AHueSourceBlock* Source = Cast<AHueSourceBlock>(&Block);
+		if (Source && Source->IsMultiOutput() && Source->GetEmitColor() == EHueColor::B)
+		{
+			TArray<EHueDir> Faces;
+			Source->GetEmitFaces(Faces);
+			BaseOutputs = Faces.Num();
+		}
+	});
+	TestEqual(TEXT("Level 2: a B source base with four outputs"), BaseOutputs, 4);
+
+	const FHueObjective* Stop = FindObjective(Layout, EHueObjectiveType::StopInZone);
+	const FHueObjective* YellowBoard = FindObjective(Layout, EHueObjectiveType::BreakBoard);
+	const FHueObjective* FarMarker = FindObjective(Layout, EHueObjectiveType::PassFarMarker);
+	UTEST_TRUE(TEXT("Level 2: stop zone, glass and far marker"), Stop && YellowBoard && FarMarker);
+	TestTrue(TEXT("Level 2: stop zone 15% wide (GDD)"), FMath::IsNearlyEqual(Stop->ZoneMax - Stop->ZoneMin, 0.15f, 1e-4f));
+	TestTrue(TEXT("Level 2: the stop zone lies before the strike zone (no overlap)"), Stop->ZoneMax < YellowBoard->ZoneMin);
+	TestTrue(TEXT("Level 2: the glass stands before the far marker"), YellowBoard->TrackFraction < FarMarker->TrackFraction);
+
+	/** The predicted run: where she rests, whether she crashed, the first key move (-1 = none). */
+	struct FPredictedOutcome
+	{
+		float MoveFraction = -1.f;
+		bool bCrashed = false;
+	};
+	auto Predict = [&Fixture](const TArray<FHueColorEvent>& History)
+	{
+		FPredictedOutcome Outcome;
+		Fixture.Rig->PredictMotion(History, Fixture.Board->RunTimeLimitSeconds, 1.f / 120.f,
+			[&Outcome](const FHueRigSample& Sample, float)
+			{
+				if (Sample.bKeyAction && Outcome.MoveFraction < 0.f)
+				{
+					Outcome.MoveFraction = Sample.KeyActionFraction;
+				}
+				Outcome.bCrashed |= Sample.bCrashed;
+			});
+		return Outcome;
+	};
+
+	// As shipped: only the south B reaches the receiver (she leans on her partner); A and G cross under it.
+	{
+		FLogicRun Unsolved;
+		UTEST_TRUE(TEXT("Unsolved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Unsolved));
+		ExpectHistory(*this, TEXT("Level 2 unsolved"), Unsolved.History, { MakeEvent(0.75f, EHueColor::B) });
+		TestFalse(TEXT("Level 2 unsolved: objectives not complete"), EvaluateTutorialObjectives(Fixture, Unsolved.History).bComplete);
+	}
+
+	// GDD counter-examples: an N alone, or the whole sequence without the yellow, never wins.
+	TestFalse(TEXT("Level 2: an N alone does not count"), EvaluateTutorialObjectives(Fixture, { MakeEvent(1.0f, EHueColor::N) }).bComplete);
+	{
+		const TArray<FHueColorEvent> NoYellow = { MakeEvent(0.75f, EHueColor::A), MakeEvent(4.75f, EHueColor::B), MakeEvent(8.0f, EHueColor::N) };
+		TestFalse(TEXT("Level 2: without the yellow move she is stopped by the glass"), EvaluateTutorialObjectives(Fixture, NoYellow).bComplete);
+		TestTrue(TEXT("Level 2: without the yellow move she runs into the glass"), Predict(NoYellow).bCrashed);
+	}
+
+	// Baseline solution.
+	AHueTutorialBuilder::InstallSolution(Fixture.Board, Layout);
+	const TArray<FHueColorEvent> ExpectedSolved =
+		{ MakeEvent(0.75f, EHueColor::A), MakeEvent(4.25f, EHueColor::Y), MakeEvent(4.75f, EHueColor::B), MakeEvent(8.0f, EHueColor::N) };
+	FLogicRun Solved;
+	UTEST_TRUE(TEXT("Solved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Solved));
+	ExpectHistory(*this, TEXT("Level 2 solved"), Solved.History, ExpectedSolved);
+	TestEqual(FString::Printf(TEXT("Level 2 solved: no warnings. Log: %s"), *DescribeFeedback(Solved.Feedback)),
+		CountFeedbackOfKind(Solved.Feedback, EHueFeedbackKind::Warning) + CountFeedbackOfKind(Solved.Feedback, EHueFeedbackKind::Error), 0);
+	TestEqual(TEXT("Level 2 solved: no conflict at the receiver"), Solved.ConflictCount, 0);
+	const FObjectiveRun Objectives = EvaluateTutorialObjectives(Fixture, Solved.History);
+	TestTrue(TEXT("Level 2 solved: every objective in order"), Objectives.bComplete);
+	TestFalse(TEXT("Level 2 solved: no crash"), Predict(Solved.History).bCrashed);
+	TestTrue(FString::Printf(TEXT("Level 2 solved: rests inside [%.3f, %.3f] (at %.3f)"), Stop->ZoneMin, Stop->ZoneMax, Objectives.Prediction.FinalFraction),
+		Objectives.Prediction.FinalFraction >= Stop->ZoneMin && Objectives.Prediction.FinalFraction <= Stop->ZoneMax);
+	AddInfo(FString::Printf(TEXT("Level 2: history [%s], move at %.3f, peak %.3f, rests at %.3f, objectives complete at %.2f s"),
+		*DescribeHistory(Solved.History), Predict(Solved.History).MoveFraction, Objectives.Prediction.MaxFraction,
+		Objectives.Prediction.FinalFraction, Objectives.CompletedAt));
+
+	// Determinism: frame length never changes a logical outcome.
+	FLogicRun SingleStep;
+	UTEST_TRUE(TEXT("Replay in a single step"), RunTutorialLogic(*this, Sim, Fixture, 20.0, SingleStep));
+	ExpectHistory(*this, TEXT("Level 2 replay, one 20 s step"), SingleStep.History, ExpectedSolved);
+
+	// Timing windows: each solution delay swept on its own (the others at their baseline). Which settings complete?
+	auto SweepDelay = [&](const FIntPoint& Cell, const TCHAR* Job)
+	{
+		AHueDelayBlock* Delay = Cast<AHueDelayBlock>(Fixture.Board->GetBlockAt(Cell));
+		if (!TestNotNull(FString::Printf(TEXT("Level 2: %s delay at (%d,%d)"), Job, Cell.X, Cell.Y), Delay))
+		{
+			return FString();
+		}
+		const float Baseline = Delay->GetDelaySeconds();
+		TArray<FString> Working;
+		TArray<FString> Outcomes;
+		const int32 MaxSteps = FMath::RoundToInt(AHueDelayBlock::MaxDelay / AHueDelayBlock::DelayStep);
+		for (int32 Steps = 0; Steps <= MaxSteps; ++Steps)
+		{
+			const float Seconds = Steps * AHueDelayBlock::DelayStep;
+			Delay->SetDelaySeconds(Seconds);
+			FLogicRun Run;
+			if (!RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Run))
+			{
+				break;
+			}
+			const FObjectiveRun Result = EvaluateTutorialObjectives(Fixture, Run.History);
+			const FPredictedOutcome Outcome = Predict(Run.History);
+			if (Result.bComplete)
+			{
+				Working.Add(FString::Printf(TEXT("%.2f"), Seconds));
+			}
+			Outcomes.Add(FString::Printf(TEXT("%.2f->%.3f%s%s"), Seconds, Result.Prediction.FinalFraction,
+				Outcome.bCrashed ? TEXT("x") : TEXT(""), Result.bComplete ? TEXT("*") : TEXT("")));
+		}
+		Delay->SetDelaySeconds(Baseline);
+		AddInfo(FString::Printf(TEXT("Level 2 %s delay sweep (delay -> rest position, x crash, * complete): %s"), Job, *FString::Join(Outcomes, TEXT(" "))));
+		return FString::Join(Working, TEXT(" "));
+	};
+	TestEqual(TEXT("Level 2: the yellow delays that work"), SweepDelay(FIntPoint(3, 1), TEXT("yellow")), FString(TEXT("2.25 2.50 2.75")));
+	TestEqual(TEXT("Level 2: the brake delays that work"), SweepDelay(FIntPoint(2, 4), TEXT("brake")), FString(TEXT("5.25 5.50")));
+	const FString PullBack = SweepDelay(FIntPoint(5, 2), TEXT("pull-back"));
+	TestTrue(FString::Printf(TEXT("Level 2: the baseline pull-back delay works (%s)"), *PullBack), PullBack.Contains(TEXT("2.50")));
 	return true;
 }
 

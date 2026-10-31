@@ -36,11 +36,12 @@ namespace HueTutorialPrivate
 	/** Default cell size of AHueBoard (used only to probe the floor before boards exist). */
 	constexpr float ProbeCellSize = 100.f;
 
-	/** Ground slab (relative to the builder): 108 m x 50 m under the four exercises (boards at x 0 .. 6000, stages
-	 *  to ~6300) and the player spawn; the west edge stays where it was for three boards. */
-	constexpr float GroundCenterX = 2800.f;
+	/** Ground slab (relative to the builder): 120 m x 50 m under the four exercises (boards at x 0 .. 6000, stages
+	 *  to ~6300), Level 2 (board at x 7200 .. 8000, stage to ~8700) and the player spawn; the west edge stays where it
+	 *  was for three boards. */
+	constexpr float GroundCenterX = 3400.f;
 	constexpr float GroundCenterY = 600.f;
-	constexpr float GroundHalfX = 5400.f;
+	constexpr float GroundHalfX = 6000.f;
 	constexpr float GroundHalfY = 2500.f;
 	/** Invisible boundary walls stand this far inside the slab edges. */
 	constexpr float WallInset = 100.f;
@@ -65,6 +66,14 @@ namespace HueTutorialPrivate
 	{
 		FHueBlockSpec Spec = MakeBlock(EHueBlockKind::Source, X, Y, Facing);
 		Spec.SourceColor = Color;
+		return Spec;
+	}
+
+	/** Source base: one pulse of Color through each face (in this order) at t = 0. */
+	FHueBlockSpec MakeSourceBase(int32 X, int32 Y, std::initializer_list<EHueDir> Faces, EHueColor Color = EHueColor::B)
+	{
+		FHueBlockSpec Spec = MakeSource(X, Y, EHueDir::East, Color);
+		Spec.SourceFaces = TArray<EHueDir>(Faces);
 		return Spec;
 	}
 
@@ -447,6 +456,94 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakeDelay(4, 2, EHueDir::North, 2.5f, true),
 		};
 	}
+
+	// ---- Level 2: exhibition box (sample) -------------------------------------------------------------------------
+	// GDD 4: one activation, the whole performance. Four jobs reach one receiver through its four faces: the push (A),
+	// the yellow move (A + G), the pull back (B) and the brake (A + B = N). The source base fires B through all four
+	// faces at once; the yellow needs the separate A and G sources (four B pulses cannot make three A and two B).
+	// No new rule: routing (ex 1), shift and delay (ex 2), mixing (ex 3) and the colour key (ex 4) together.
+	// Graybox sample on the same table for now; it moves to its own map with the menus (week 5).
+	{
+		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(4,
+			TEXT("Level 2 · Exhibition Box"),
+			TEXT("The commission, from one activation: the dancer leaves her partner, breaks the yellow glass, runs past the ")
+			TEXT("far marker, is pulled back and stops in the central spotlight. The base fires four B pulses (east, north, ")
+			TEXT("west, south); the A and G sources are for the yellow. {Supply}. Each job needs its own way into the receiver: ")
+			TEXT("push A, yellow A + G, pull back B, brake A + B = N.")));
+		Layout.GridSize = FIntPoint(8, 8);
+		// A longer stage than the exercises: the strike zone, the far marker and the stop spotlight do not overlap.
+		Layout.TrackLength = 1400.f;
+
+		Layout.Blocks = {
+			MakeSourceBase(3, 5, { EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South }, EHueColor::B),
+			MakeReceiver(3, 2, { EHueDir::West, EHueDir::North, EHueDir::East, EHueDir::South }),
+			// The key pair on row 1: shipped, A and G cross under the receiver and stop at the opposite source.
+			MakeSource(0, 1, EHueDir::East, EHueColor::A),
+			MakeSource(7, 1, EHueDir::West, EHueColor::G),
+			// The east output cannot drop straight down beside the receiver: its way round is column 6.
+			MakeBlock(EHueBlockKind::Barrier, 4, 3),
+			MakeBlock(EHueBlockKind::Barrier, 5, 3),
+		};
+
+		// GDD: up to 12 turns, 2 shifts, 3 delays; one mixer more than the GDD for the yellow.
+		Layout.Pickups = {
+			MakePickup(EHueModuleType::Turn, 12, 100.f, 920.f),
+			MakePickup(EHueModuleType::ColorShift, 2, 260.f, 920.f),
+			MakePickup(EHueModuleType::Delay, 3, 420.f, 920.f),
+			MakePickup(EHueModuleType::Mixer, 2, 580.f, 920.f),
+		};
+
+		FHueObjective Leave = MakeObjective(EHueObjectiveType::LeaveStart, TEXT("Leaves her partner"));
+		Leave.TrackFraction = 0.12f;
+		FHueObjective YellowBoard = MakeObjective(EHueObjectiveType::BreakBoard, TEXT("Break the yellow glass"));
+		YellowBoard.Color = EHueColor::Y;
+		// Same margins as exercise 4 (in cm): the baseline move (delay 2.50 s) lands at ~954 cm, one delay step either
+		// side at ~879 / ~1029 cm; the zone holds those three and keeps 2.00 s / 3.00 s outside.
+		YellowBoard.ZoneMin = 0.6025f;
+		YellowBoard.ZoneMax = 0.7625f;
+		YellowBoard.TrackFraction = 0.80f;
+		FHueObjective PastFar = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Runs past the far marker"));
+		PastFar.TrackFraction = 0.857f;
+		FHueObjective Stop = MakeObjective(EHueObjectiveType::StopInZone, TEXT("Stops in the central spotlight for 1 s"));
+		// GDD: target width 15% of the track, at most 2% of the track per second for 1 s.
+		Stop.ZoneMin = 0.425f;
+		Stop.ZoneMax = 0.575f;
+		Stop.MaxSpeedFraction = 0.02f;
+		Stop.HoldSeconds = 1.0f;
+		Layout.Objectives = { Leave, YellowBoard, PastFar, Stop };
+
+		// Baseline (17 modules), receiver deliveries A 0.75 s, Y 4.25 s, B 4.75 s, N 8.00 s:
+		// Push: C(3,3) South turns the south B into A -> R north face at 0.75 s.
+		// Yellow: T(1,1) W + T(1,0) E bring A along row 0 to M(3,0) North (1.00 s), T(4,1) S + T(4,0) N bring G (1.25 s);
+		//   Y leaves at 1.25 s, D(3,1) North 2.50 s -> R south face at 4.25 s (move at ~0.68, glass at 0.80).
+		// Pull back: T(6,5) W + T(6,2) N take the east B round the barriers, D(5,2) West 2.50 s -> R east face at 4.75 s
+		//   (she turns at ~0.79 and peaks at ~0.92, past the far marker).
+		// Brake: C(3,6) North makes the north pulse A, T(3,7) W -> M(2,7) South east input (0.75 s); the west B goes
+		//   T(1,5) E + T(1,7) S -> west input (1.25 s, dt 0.50 s); N down column 2, D(2,4) South 5.25 s, T(2,2) E ->
+		//   R west face at 8.00 s, on her way back at full speed -> rests at ~0.53.
+		Layout.SolutionBlocks = {
+			MakeBlock(EHueBlockKind::ColorShift, 3, 3, EHueDir::South, true),
+
+			MakeBlock(EHueBlockKind::Turn, 1, 1, EHueDir::West, true),
+			MakeBlock(EHueBlockKind::Turn, 1, 0, EHueDir::East, true),
+			MakeBlock(EHueBlockKind::Turn, 4, 1, EHueDir::South, true),
+			MakeBlock(EHueBlockKind::Turn, 4, 0, EHueDir::North, true),
+			MakeBlock(EHueBlockKind::Mixer, 3, 0, EHueDir::North, true),
+			MakeDelay(3, 1, EHueDir::North, 2.5f, true),
+
+			MakeBlock(EHueBlockKind::Turn, 6, 5, EHueDir::West, true),
+			MakeBlock(EHueBlockKind::Turn, 6, 2, EHueDir::North, true),
+			MakeDelay(5, 2, EHueDir::West, 2.5f, true),
+
+			MakeBlock(EHueBlockKind::ColorShift, 3, 6, EHueDir::North, true),
+			MakeBlock(EHueBlockKind::Turn, 3, 7, EHueDir::West, true),
+			MakeBlock(EHueBlockKind::Turn, 1, 5, EHueDir::East, true),
+			MakeBlock(EHueBlockKind::Turn, 1, 7, EHueDir::South, true),
+			MakeBlock(EHueBlockKind::Mixer, 2, 7, EHueDir::South, true),
+			MakeDelay(2, 4, EHueDir::South, 5.25f, true),
+			MakeBlock(EHueBlockKind::Turn, 2, 2, EHueDir::East, true),
+		};
+	}
 }
 
 // ---- Static helpers -------------------------------------------------------------------------------------------
@@ -507,6 +604,10 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	if (AHueSourceBlock* SourceBlock = Cast<AHueSourceBlock>(Block))
 	{
 		SourceBlock->SetEmitColor(Spec.SourceColor);
+		if (Spec.SourceFaces.Num() > 0)
+		{
+			SourceBlock->SetEmitFaces(Spec.SourceFaces);
+		}
 	}
 	else if (AHueDelayBlock* DelayBlock = Cast<AHueDelayBlock>(Block))
 	{

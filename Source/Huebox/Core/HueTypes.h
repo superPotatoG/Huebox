@@ -12,11 +12,14 @@ DECLARE_LOG_CATEGORY_EXTERN(LogHuebox, Log, All);
  *  Motion signals - the only colours the dancer reacts to: A = red (repels), B = cyan = green + blue (attracts),
  *  N = white = all three (brakes).
  *  Key colours - they never move the dancer: G = green, Y = yellow = red + green, M = magenta = red + blue,
- *  V = violet (blue). A key colour reaching the dancer makes her do that colour's move where she is; a board of that
+ *  V = blue. A key colour reaching the dancer makes her do that colour's move where she is; a board of that
  *  colour on her track breaks only for it (EHueObjectiveType::BreakBoard). The move itself is skin data.
  *  Colour is always a key and a lock of the same colour opens: on the grid a brick (AHueBrickBlock), on the stage a board.
  * The set is closed under mixing (disjoint primaries add up) and colour shift (complement), so every pulse a board
  * can produce has a letter. Enum order is saved data: append new values at the end.
+ *
+ * The enum names are the GDD's original letters and stay (saved data, code); the player only ever sees
+ * HueColor::Label, the colour's own initial since 11-01: A "R", B "C", N "W", G "G", Y "Y", M "M", V "B".
  */
 UENUM(BlueprintType)
 enum class EHueColor : uint8
@@ -276,9 +279,9 @@ namespace HueColor
 	constexpr uint8 Green = 2;
 	constexpr uint8 Blue = 4;
 
-	/** Display colour (red / cyan / white / green / yellow / magenta / violet). */
+	/** Display colour (red / cyan / white / green / yellow / magenta / blue). */
 	HUEBOX_API FLinearColor ToLinear(EHueColor Color);
-	/** "A", "B", "N", "G", "Y", "M" or "V" - letters always accompany colour (accessibility). */
+	/** The colour's initial: "R", "C", "W", "G", "Y", "M" or "B" - letters always accompany colour (accessibility). */
 	HUEBOX_API const TCHAR* Label(EHueColor Color);
 	/** Plain name for rule text: "red", "cyan", "white", ... */
 	HUEBOX_API const TCHAR* Name(EHueColor Color);
@@ -288,12 +291,22 @@ namespace HueColor
 	HUEBOX_API bool FromMask(uint8 Mask, EHueColor& OutColor);
 	/** "red", "green + blue", ... for a primary mask (mixer failure text). */
 	HUEBOX_API FString DescribePrimaries(uint8 Mask);
+	/** The three primary slots of a mask, always red-green-blue: "[R--]", "[-GB]", "[RGB]" ("-" = that primary missing). */
+	HUEBOX_API FString SlotsOfMask(uint8 Mask);
+	/** SlotsOfMask(ToMask(Color)). */
+	HUEBOX_API FString Slots(EHueColor Color);
+	/** "C[-GB]": label and slots, the way rule and feedback text names a colour. */
+	HUEBOX_API FString LabelWithSlots(EHueColor Color);
+	/** What the colour does to the dancer, in words: why it pushes (same colour as her red partner), pulls, brakes,
+	 *  or that it is a key (her move). */
+	HUEBOX_API const TCHAR* MotionMeaning(EHueColor Color);
 	/**
-	 * Mixer rule (additive light): two colours without a primary in common add up (A + B = N, A + G = Y, G + V = B,
-	 * Y + V = N, ...). Returns false when they share a primary (matching colours, anything with N, A + Y, ...).
+	 * Mixer rule (additive light): two colours without a primary in common add up (shown R + C = W, R + G = Y,
+	 * G + B = C, Y + B = W, ...). Returns false when they share a primary (matching colours, anything with W, R + Y, ...).
 	 */
 	HUEBOX_API bool Mix(EHueColor First, EHueColor Second, EHueColor& OutMixed);
-	/** Colour-shift rule: the complementary colour (A <-> B, G <-> M, Y <-> V); N passes unchanged. */
+	/** Colour-shift rule: the complementary colour, every primary slot flipped (shown R <-> C, G <-> M, Y <-> B);
+	 *  W passes unchanged. */
 	HUEBOX_API EHueColor Shift(EHueColor Color);
 	/** A, B and N move the dancer; every other colour is a key that triggers her move for that colour. */
 	HUEBOX_API bool DrivesRig(EHueColor Color);

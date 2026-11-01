@@ -102,15 +102,17 @@ FLinearColor HueColor::ToLinear(EHueColor Color)
 
 const TCHAR* HueColor::Label(EHueColor Color)
 {
+	// The colour's own initial (enum order A, B, N, G, Y, M, V). Until 11-01 these were the GDD letters A / B / N,
+	// and "B" for cyan read as blue to players.
 	static const TCHAR* const Labels[HueTypesPrivate::NumColors] =
-		{ TEXT("A"), TEXT("B"), TEXT("N"), TEXT("G"), TEXT("Y"), TEXT("M"), TEXT("V") };
+		{ TEXT("R"), TEXT("C"), TEXT("W"), TEXT("G"), TEXT("Y"), TEXT("M"), TEXT("B") };
 	return Labels[HueTypesPrivate::ColorIndex(Color)];
 }
 
 const TCHAR* HueColor::Name(EHueColor Color)
 {
 	static const TCHAR* const Names[HueTypesPrivate::NumColors] =
-		{ TEXT("red"), TEXT("cyan"), TEXT("white"), TEXT("green"), TEXT("yellow"), TEXT("magenta"), TEXT("violet") };
+		{ TEXT("red"), TEXT("cyan"), TEXT("white"), TEXT("green"), TEXT("yellow"), TEXT("magenta"), TEXT("blue") };
 	return Names[HueTypesPrivate::ColorIndex(Color)];
 }
 
@@ -162,6 +164,36 @@ FString HueColor::DescribePrimaries(uint8 Mask)
 	return Parts.Num() > 0 ? FString::Join(Parts, TEXT(" + ")) : FString(TEXT("no light"));
 }
 
+FString HueColor::SlotsOfMask(uint8 Mask)
+{
+	return FString::Printf(TEXT("[%s%s%s]"),
+		(Mask & Red) ? TEXT("R") : TEXT("-"),
+		(Mask & Green) ? TEXT("G") : TEXT("-"),
+		(Mask & Blue) ? TEXT("B") : TEXT("-"));
+}
+
+FString HueColor::Slots(EHueColor Color)
+{
+	return SlotsOfMask(ToMask(Color));
+}
+
+FString HueColor::LabelWithSlots(EHueColor Color)
+{
+	return FString(Label(Color)) + Slots(Color);
+}
+
+const TCHAR* HueColor::MotionMeaning(EHueColor Color)
+{
+	// The partner (the rig's anchor) is red: same colour repels, a different motion colour attracts.
+	switch (Color)
+	{
+	case EHueColor::A: return TEXT("same colour as her red partner - pushed away");
+	case EHueColor::B: return TEXT("not her partner's colour - pulled back");
+	case EHueColor::N: return TEXT("red + cyan at once - push and pull cancel: brakes");
+	default:           return TEXT("a key - she does its move");
+	}
+}
+
 bool HueColor::Mix(EHueColor First, EHueColor Second, EHueColor& OutMixed)
 {
 	const uint8 FirstMask = ToMask(First);
@@ -201,7 +233,7 @@ const TCHAR* HueModule::ShortName(EHueModuleType Type)
 
 FLinearColor HueModule::BodyColor(EHueModuleType Type)
 {
-	// "2D white props": every module is a white tile told apart by its dark label (TURN, A<>B, D 1.25s, MIX)
+	// "2D white props": every module is a white tile told apart by its dark label (TURN, SHIFT, D 1.25s, MIX)
 	// and port markers, so colour on the grid always means a signal colour (sources, receivers, pulses).
 	static const FLinearColor ModuleWhite(0.92f, 0.92f, 0.90f);
 	static const FLinearColor Colors[5] =

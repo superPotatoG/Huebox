@@ -111,7 +111,7 @@ AHueColorShiftBlock::AHueColorShiftBlock()
 	ModuleType = EHueModuleType::ColorShift;
 	BlockDisplayName = TEXT("Colour shift");
 	BaseColor = HueModule::BodyColor(EHueModuleType::ColorShift);
-	SetLabelText(TEXT("A<>B"), TileLabelColor());
+	SetLabelText(TEXT("SHIFT"), TileLabelColor());
 }
 
 EPulseResponse AHueColorShiftBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -127,6 +127,12 @@ EPulseResponse AHueColorShiftBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsys
 	Pulse.Color = HueColor::Shift(Pulse.Color); // direction preserved
 	NoteOutput(FString::Printf(TEXT("%s (was %s)"),
 		*FormatOutput(Pulse.Color, Pulse.Direction, Sim.GetSimTimeMs()), HueColor::Label(Before)));
+	// Spelled out in primary slots, so the rule shows itself: every slot flips (C[-GB] -> R[R--]).
+	Sim.Report(EHueFeedbackKind::Info, Pulse.Color == Before
+		? FString::Printf(TEXT("%s: %s passes unchanged (white has no opposite)"), *DescribeBlock(), *HueColor::LabelWithSlots(Before))
+		: FString::Printf(TEXT("%s: %s -> %s (every slot flipped)"), *DescribeBlock(),
+			*HueColor::LabelWithSlots(Before), *HueColor::LabelWithSlots(Pulse.Color)),
+		Cell);
 	return EPulseResponse::Continue;
 }
 
@@ -145,7 +151,7 @@ void AHueColorShiftBlock::GetPorts(TArray<FHuePort>& OutPorts) const
 
 FString AHueColorShiftBlock::GetRuleText() const
 {
-	return FString::Printf(TEXT("Turns a pulse into its complementary colour: A <-> B (also G <-> M, Y <-> V); N passes unchanged. One-way: accepts pulses travelling %s."),
+	return FString::Printf(TEXT("Flips every primary slot: the parts the light has go out, the missing ones come in. R[R--] <-> C[-GB], G[-G-] <-> M[R-B], Y[RG-] <-> B[--B]; W[RGB] passes unchanged. One-way: accepts pulses travelling %s."),
 		HueDir::ToString(Facing));
 }
 
@@ -394,9 +400,11 @@ EPulseResponse AHueMixerBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& 
 		{
 			NoteOutput(FString::Printf(TEXT("%s (%s+%s, dt %.2fs)"), *FormatOutput(Mixed, Facing, NowMs),
 				HueColor::Label(FirstColor), HueColor::Label(SecondColor), HueTime::MsToSeconds(DeltaMs)));
+			// Spelled out in primary slots, so the rule shows itself: the parts add up (R[R--] + C[-GB] -> W[RGB]).
 			Sim.Report(EHueFeedbackKind::Info,
 				FString::Printf(TEXT("%s: %s + %s -> %s (dt %.2f s)"), *DescribeBlock(),
-					HueColor::Label(FirstColor), HueColor::Label(SecondColor), HueColor::Label(Mixed), HueTime::MsToSeconds(DeltaMs)), Cell);
+					*HueColor::LabelWithSlots(FirstColor), *HueColor::LabelWithSlots(SecondColor), *HueColor::LabelWithSlots(Mixed),
+					HueTime::MsToSeconds(DeltaMs)), Cell);
 		}
 		else
 		{
@@ -406,18 +414,21 @@ EPulseResponse AHueMixerBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& 
 	else
 	{
 		FString Reason;
+		// Slots in every reason: the clash is the primary both sides hold.
+		const uint8 Shared = HueColor::ToMask(FirstColor) & HueColor::ToMask(SecondColor);
 		if (FirstColor == EHueColor::N || SecondColor == EHueColor::N)
 		{
-			Reason = TEXT("N cannot be mixed (white already holds every primary)");
+			Reason = FString::Printf(TEXT("%s cannot be mixed (white already holds every primary)"), *HueColor::LabelWithSlots(EHueColor::N));
 		}
 		else if (FirstColor == SecondColor)
 		{
-			Reason = FString::Printf(TEXT("matching colours %s+%s"), HueColor::Label(FirstColor), HueColor::Label(SecondColor));
+			Reason = FString::Printf(TEXT("matching colours %s+%s share %s"), *HueColor::LabelWithSlots(FirstColor),
+				*HueColor::LabelWithSlots(SecondColor), *HueColor::DescribePrimaries(Shared));
 		}
 		else
 		{
-			Reason = FString::Printf(TEXT("%s+%s share %s light"), HueColor::Label(FirstColor), HueColor::Label(SecondColor),
-				*HueColor::DescribePrimaries(HueColor::ToMask(FirstColor) & HueColor::ToMask(SecondColor)));
+			Reason = FString::Printf(TEXT("%s+%s share %s light"), *HueColor::LabelWithSlots(FirstColor),
+				*HueColor::LabelWithSlots(SecondColor), *HueColor::DescribePrimaries(Shared));
 		}
 		const FString Detail = FString::Printf(TEXT("in%d %s + in%d %s, both pulses consumed"),
 			FirstInput, HueColor::Label(FirstColor), Input, HueColor::Label(SecondColor));
@@ -510,7 +521,7 @@ FString AHueMixerBlock::GetRuleText() const
 {
 	const AHueBoard* Board = GetBoard();
 	const double WindowSeconds = Board ? Board->MixWindowSeconds : 0.5;
-	return FString::Printf(TEXT("Adds light: one pulse per input within %s s -> one mixed pulse out %s (A + B = N, A + G = Y). in0 = %s face, in1 = %s face. Colours sharing a primary (A + A, anything + N) or a timeout fail."),
+	return FString::Printf(TEXT("Adds light: one pulse per input within %s s -> one pulse out %s holding both sets of parts: R[R--] + C[-GB] = W[RGB], R[R--] + G[-G-] = Y[RG-]. in0 = %s face, in1 = %s face. A part on both sides fails (R + R, R + Y, anything + W), so does a timeout."),
 		*FString::SanitizeFloat(WindowSeconds), HueDir::ToString(Facing),
 		HueDir::ToString(GetInputFace(0)), HueDir::ToString(GetInputFace(1)));
 }

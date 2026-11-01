@@ -95,6 +95,24 @@ namespace HueRigPrivate
 	/** Marks where key moves happened: short posts on the viewer side of the track. */
 	constexpr float MoveMarkHeight = 30.f;
 	constexpr float MoveMarkGlow = 2.f;
+	/** Reason above her head: how long it stays, its height above the track and its letter size (cm). */
+	constexpr float ReasonSeconds = 3.f;
+	constexpr float ReasonZ = 215.f;
+	constexpr float ReasonSize = 16.f;
+	constexpr float ReasonY = 30.f;
+
+	/** Two short lines for the stage (the feedback log has the long form, HueColor::MotionMeaning). The partner sits at
+	 *  the left end, so ">>" is away from her and "<<" back towards her. */
+	FString StageReason(EHueColor Color)
+	{
+		switch (Color)
+		{
+		case EHueColor::A: return TEXT("R  like her partner\npushed away  >>");
+		case EHueColor::B: return TEXT("C  not like her partner\n<<  pulled back");
+		case EHueColor::N: return TEXT("W = R + C\npush and pull cancel: brakes");
+		default:           return FString::Printf(TEXT("%s  a key\nher move"), HueColor::Label(Color));
+		}
+	}
 
 	static const FLinearColor TrackColor(0.4f, 0.42f, 0.45f);
 	static const FLinearColor StopColor(0.15f, 0.15f, 0.15f);
@@ -148,9 +166,9 @@ namespace HueRigPrivate
 	{
 		switch (Color)
 		{
-		case EHueColor::A: return TEXT("repel");
-		case EHueColor::B: return TEXT("attract");
-		default:           return TEXT("brake");
+		case EHueColor::A: return TEXT("pushed away");
+		case EHueColor::B: return TEXT("pulled back");
+		default:           return TEXT("brakes");
 		}
 	}
 }
@@ -191,6 +209,12 @@ AReactiveRig::AReactiveRig()
 	StateLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("StateLabel"));
 	StateLabel->SetupAttachment(SceneRoot);
 	SetupText(StateLabel, 24.f, FColor::White);
+
+	// Under the rig root (not the physics body): Tick moves it along with her, upright whatever the body does.
+	ReasonLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("ReasonLabel"));
+	ReasonLabel->SetupAttachment(SceneRoot);
+	SetupText(ReasonLabel, ReasonSize, LetterOnBodyColor);
+	ReasonLabel->SetText(FText::GetEmpty());
 
 	// Carriage: the only simulated body. Chaos DOF lock keeps it on the track (X translation only).
 	Carriage = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Carriage"));
@@ -363,6 +387,7 @@ void AReactiveRig::Tick(float DeltaSeconds)
 	UpdateStageBoards(DeltaSeconds);
 	UpdateShards(DeltaSeconds);
 	UpdatePerformer(DeltaSeconds);
+	UpdateReason(DeltaSeconds);
 
 	if (!bMotionActive || bMotionPaused || !IsValid(Carriage) || !Carriage->IsSimulatingPhysics())
 	{
@@ -408,6 +433,38 @@ void AReactiveRig::ApplyColor(EHueColor NewColor)
 		Carriage->SetLinearDamping(NewColor == EHueColor::N ? BrakeDamping : BaseDamping);
 	}
 	UpdateColorVisuals();
+	// Only colours delivered during a run explain themselves (the reset back to N stays quiet).
+	if (bMotionActive)
+	{
+		ShowReason(NewColor);
+	}
+}
+
+void AReactiveRig::ShowReason(EHueColor Color)
+{
+	if (!ReasonLabel)
+	{
+		return;
+	}
+	ReasonLabel->SetText(FText::FromString(HueRigPrivate::StageReason(Color)));
+	ReasonTimeLeft = HueRigPrivate::ReasonSeconds;
+	UpdateReason(0.f);
+}
+
+void AReactiveRig::UpdateReason(float DeltaSeconds)
+{
+	if (!ReasonLabel || ReasonTimeLeft <= 0.f)
+	{
+		return;
+	}
+	ReasonTimeLeft -= DeltaSeconds;
+	if (ReasonTimeLeft <= 0.f)
+	{
+		ReasonTimeLeft = 0.f;
+		ReasonLabel->SetText(FText::GetEmpty());
+		return;
+	}
+	ReasonLabel->SetRelativeLocation(FVector(GetCarriageFraction() * TrackLength, HueRigPrivate::ReasonY, HueRigPrivate::ReasonZ));
 }
 
 void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
@@ -465,6 +522,7 @@ void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 		CarriageLabel->SetText(FText::FromString(HueColor::Label(KeyColor)));
 		CarriageLabel->SetTextRenderColor(Color.ToFColor(true));
 	}
+	ShowReason(KeyColor);
 	if (StateLabel)
 	{
 		StateLabel->SetText(FText::FromString(FString::Printf(TEXT("%s: %s move"), *GetPerformerName(), HueColor::Label(KeyColor))));
@@ -687,6 +745,13 @@ void AReactiveRig::CheckStageBoardContact()
 			// ResetRig (ApplyColor) brings it back.
 			CarriageLabel->SetText(FText::GetEmpty());
 		}
+		if (ReasonLabel)
+		{
+			// The glass is what stops her now, not the colour: say that instead.
+			ReasonLabel->SetText(FText::FromString(FString::Printf(TEXT("ran into the %s glass\nbreak it first: a %s move"),
+				HueColor::Name(Board.Color), HueColor::Label(Board.Color))));
+			ReasonTimeLeft = HueRigPrivate::ReasonSeconds;
+		}
 		const FLinearColor Color = HueColor::ToLinear(Board.Color);
 		if (StateLabel)
 		{
@@ -805,6 +870,11 @@ void AReactiveRig::ResetRig()
 	RestoreStageBoards();
 	ClearMoveMarks();
 	ApplyColor(EHueColor::N);
+	ReasonTimeLeft = 0.f;
+	if (ReasonLabel)
+	{
+		ReasonLabel->SetText(FText::GetEmpty());
+	}
 	AttemptMaxFraction = TrackLength > KINDA_SMALL_NUMBER ? static_cast<float>(GetLocalStart().X) / TrackLength : 0.f;
 }
 

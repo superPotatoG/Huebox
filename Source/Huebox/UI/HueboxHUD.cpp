@@ -3,7 +3,9 @@
 #include "Blocks/HueFixedBlocks.h"
 #include "Blocks/HueModuleBlocks.h"
 #include "Blocks/PulseBlock.h"
+#include "CanvasItem.h"
 #include "Engine/Canvas.h"
+#include "GlobalRenderResources.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
 #include "Engine/World.h"
@@ -247,14 +249,15 @@ namespace HueHUD
 		}
 	}
 
+	/** Short form of HueColor::MotionMeaning for the status line. */
 	static const TCHAR* ColorMeaning(EHueColor Color)
 	{
 		switch (Color)
 		{
-		case EHueColor::A: return TEXT("repel");
-		case EHueColor::B: return TEXT("attract");
+		case EHueColor::A: return TEXT("pushed away");
+		case EHueColor::B: return TEXT("pulled back");
 		case EHueColor::N:
-		default:           return TEXT("brake");
+		default:           return TEXT("brakes");
 		}
 	}
 
@@ -294,7 +297,7 @@ namespace HueHUD
 		switch (Type)
 		{
 		case EHueModuleType::Turn:       return TEXT("T");
-		case EHueModuleType::ColorShift: return TEXT("C");
+		case EHueModuleType::ColorShift: return TEXT("X"); // "C" is cyan light now
 		case EHueModuleType::Delay:      return TEXT("D");
 		case EHueModuleType::Mixer:      return TEXT("M");
 		case EHueModuleType::None:
@@ -330,7 +333,7 @@ namespace HueHUD
 		else if (const AHueReceiverBlock* Receiver = Cast<AHueReceiverBlock>(&Block))
 		{
 			Tile.Fill = HueColor::ToLinear(Receiver->GetCurrentColor());
-			Tile.Letter = TEXT("R");
+			Tile.Letter = TEXT("@"); // "R" is red light now
 		}
 		else if (Block.IsA<AHueBarrierBlock>())
 		{
@@ -468,7 +471,7 @@ namespace HueHUD
 	};
 
 	static const TCHAR* const BuildHelpFooter = TEXT("Modules come from this board's tray; collected blocks go back into it.");
-	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  R receiver  T turn  C colour shift  D delay  M mixer  # brick  (dots = pulses)");
+	static const TCHAR* const WatchHelpFooter = TEXT("Map: S source  @ receiver  T turn  X colour shift  D delay  M mixer  # brick  (dots = pulses, letter = colour)");
 
 	/** Bottom hint bar of the Build view. */
 	static const FBinding BuildHints[] =
@@ -580,11 +583,12 @@ void AHueboxHUD::DrawHUD()
 		}
 		DrawFeedback(Manager);
 
-		// The hint bar goes first: prompt, help and minimap are placed relative to it.
+		// The hint bar goes first: prompt, help, light key and minimap are placed relative to it.
 		DrawHintBar(Context);
 
 		if (bBuildView)
 		{
+			DrawLightKey();
 			if (Tool)
 			{
 				DrawTargetPanel(Tool, Context);
@@ -1569,6 +1573,131 @@ void AHueboxHUD::DrawRunBanner(const AExhibitManager* Manager)
 }
 
 // ---- Overlays -----------------------------------------------------------------------------------------------
+
+void AHueboxHUD::DrawLightKey()
+{
+	const float S = UIScale;
+	const float PadPx = HueHUD::Pad * S;
+	const float GapPx = HueHUD::LineGap * S;
+	const float ColumnGap = 12.f * S;
+	// Circle radius of the diagram; the three centres sit one radius apart (a classic three-set Venn).
+	const float Radius = 38.f * S;
+
+	const FString Heading = TEXT("Light = red + green + blue parts");
+	TArray<HueHUD::FLine> Lines;
+	HueHUD::AddLine(Lines, TEXT("Mix: the parts add up   R + C = W   R + G = Y"), HueHUD::TextColor);
+	HueHUD::AddLine(Lines, TEXT("   a part on both sides fails (R + R, R + Y)"), HueHUD::DimColor);
+	HueHUD::AddLine(Lines, TEXT("Shift: every part flips   C[-GB] -> R[R--]"), HueHUD::TextColor);
+	HueHUD::AddLine(Lines, TEXT("Her partner is red:"), HueHUD::TextColor);
+	HueHUD::AddLine(Lines, TEXT("   R  pushed away (same colour)"), HueColor::ToLinear(EHueColor::A));
+	HueHUD::AddLine(Lines, TEXT("   C  pulled back (not red)"), HueColor::ToLinear(EHueColor::B));
+	HueHUD::AddLine(Lines, TEXT("   W  brakes (red + cyan cancel)"), HueColor::ToLinear(EHueColor::N));
+	HueHUD::AddLine(Lines, TEXT("   G, Y ...  keys: she does a move"), HueHUD::DimColor);
+
+	UFont* Font = HueHUD::BodyFont();
+	const FVector2f HeadingSize = HueHUD::Measure(*this, Heading, HueHUD::HeadingFont(), S);
+	const float TextWidth = HueHUD::MeasureLinesWidth(*this, Lines, S);
+	float TextHeight = GapPx * (Lines.Num() - 1);
+	TArray<float, TInlineAllocator<8>> LineHeights;
+	for (const HueHUD::FLine& Line : Lines)
+	{
+		LineHeights.Add(static_cast<float>(HueHUD::Measure(*this, Line.Text, Font, S).Y));
+		TextHeight += LineHeights.Last();
+	}
+
+	const float DiagramWidth = 3.f * Radius;
+	const float DiagramHeight = 2.9f * Radius;
+	const float BodyHeight = FMath::Max(DiagramHeight, TextHeight);
+	const float BoxWidth = FMath::Max(static_cast<float>(HeadingSize.X), DiagramWidth + ColumnGap + TextWidth) + 2.f * PadPx;
+	const float BoxHeight = static_cast<float>(HeadingSize.Y) + GapPx * 3.f + BodyHeight + 2.f * PadPx;
+
+	// Bottom-left; above the centred hint bar if the two would meet (as the help panel does).
+	const float Left = HueHUD::Margin * S;
+	float Top = Canvas->ClipY - HueHUD::Margin * S - BoxHeight;
+	const float HintBarLeft = Canvas->ClipX - HintBarRight;
+	if (HintBarRight > 0.f && Left + BoxWidth + HueHUD::PanelGap * S > HintBarLeft)
+	{
+		Top = HintBarTop - HueHUD::PanelGap * S - BoxHeight;
+	}
+
+	DrawRect(HueHUD::Backing, Left, Top, BoxWidth, BoxHeight);
+	DrawText(Heading, HueHUD::AmberColor, Left + PadPx, Top + PadPx, HueHUD::HeadingFont(), S);
+	const float BodyTop = Top + PadPx + static_cast<float>(HeadingSize.Y) + GapPx * 3.f;
+
+	// ---- The diagram: three primaries drawn additively, so where they overlap the screen really shows Y, C, M, W ----
+	const FVector2D Center(Left + PadPx + DiagramWidth * 0.5f, BodyTop + BodyHeight * 0.5f);
+	// Unit directions (screen space, +Y down) from the diagram centre to the red, green and blue circle centres.
+	const FVector2D DirRed(-0.866, -0.5);
+	const FVector2D DirGreen(0.866, -0.5);
+	const FVector2D DirBlue(0.0, 1.0);
+	const double CentreOffset = Radius * 0.577; // centres one radius apart
+	struct FPrimaryDisc
+	{
+		FVector2D Dir;
+		FLinearColor Color;
+	};
+	const FPrimaryDisc Discs[] =
+	{
+		{ DirRed, FLinearColor(1.f, 0.f, 0.f) },
+		{ DirGreen, FLinearColor(0.f, 1.f, 0.f) },
+		{ DirBlue, FLinearColor(0.f, 0.f, 1.f) },
+	};
+	constexpr int32 DiscSides = 36;
+	for (const FPrimaryDisc& Disc : Discs)
+	{
+		const FVector2D DiscCenter = Center + Disc.Dir * CentreOffset;
+		TArray<FCanvasUVTri> Tris;
+		Tris.Reserve(DiscSides);
+		for (int32 Side = 0; Side < DiscSides; ++Side)
+		{
+			const double A0 = UE_DOUBLE_TWO_PI * Side / DiscSides;
+			const double A1 = UE_DOUBLE_TWO_PI * (Side + 1) / DiscSides;
+			FCanvasUVTri& Tri = Tris.AddDefaulted_GetRef();
+			Tri.V0_Pos = DiscCenter;
+			Tri.V1_Pos = DiscCenter + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * Radius;
+			Tri.V2_Pos = DiscCenter + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * Radius;
+			Tri.V0_Color = Tri.V1_Color = Tri.V2_Color = Disc.Color;
+		}
+		FCanvasTriangleItem Item(Tris, GWhiteTexture);
+		Item.BlendMode = SE_BLEND_Additive;
+		Canvas->DrawItem(Item);
+	}
+
+	// Region letters: a primary alone outside, two primaries opposite the third circle, all three in the middle.
+	struct FRegionLetter
+	{
+		EHueColor Color;
+		FVector2D Offset;
+	};
+	const double Single = Radius * 1.05;
+	const double Pair = Radius * 0.79;
+	const FRegionLetter Letters[] =
+	{
+		{ EHueColor::A, DirRed * Single },
+		{ EHueColor::G, DirGreen * Single },
+		{ EHueColor::V, DirBlue * Single },
+		{ EHueColor::Y, -DirBlue * Pair },
+		{ EHueColor::M, -DirGreen * Pair },
+		{ EHueColor::B, -DirRed * Pair },
+		{ EHueColor::N, FVector2D::ZeroVector },
+	};
+	for (const FRegionLetter& Letter : Letters)
+	{
+		// Dark ink on the bright regions, white on blue.
+		const FLinearColor Ink = Letter.Color == EHueColor::V ? HueHUD::TextColor : HueHUD::TileInk;
+		const FVector2D At = Center + Letter.Offset;
+		HueHUD::DrawCentredText(*this, HueColor::Label(Letter.Color), static_cast<float>(At.X), static_cast<float>(At.Y), Radius * 0.45f, Ink);
+	}
+
+	// ---- The rules next to it ----------------------------------------------------------------------------------
+	const float TextLeft = Left + PadPx + DiagramWidth + ColumnGap;
+	float RowY = BodyTop + (BodyHeight - TextHeight) * 0.5f;
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		DrawText(Lines[Index].Text, Lines[Index].Color, TextLeft, RowY, Font, S);
+		RowY += LineHeights[Index] + GapPx;
+	}
+}
 
 void AHueboxHUD::DrawHelp(EHudContext Context)
 {

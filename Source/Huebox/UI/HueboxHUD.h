@@ -75,6 +75,9 @@ protected:
 	void DrawMinimap(const AHueBoard* Board);
 	/** Watch view: centred "complete" / "ended" banner with the next steps. */
 	void DrawRunBanner(const AExhibitManager* Manager);
+	/** Build view, bottom-left: how light works - the red / green / blue overlap diagram (drawn additively, so the
+	 *  overlaps really are Y, C, M, W), mixing, shifting and what each colour does to the dancer. */
+	void DrawLightKey();
 
 	/** Text with a dark backing box. Returns the height used. */
 	float DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale = 1.f, bool bBacking = true);

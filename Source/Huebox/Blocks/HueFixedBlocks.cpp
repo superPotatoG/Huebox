@@ -262,7 +262,8 @@ void AHueReceiverBlock::ResolveMotionGroup(UPulseSubsystem& Sim)
 	}
 
 	NoteOutput(FString::Printf(TEXT("applied %s @%.2fs"), HueColor::Label(NewColor), TimeSeconds));
-	Sim.Report(EHueFeedbackKind::Info, FString::Printf(TEXT("Receiver -> %s"), HueColor::Label(NewColor)), Cell);
+	// The reason, not only the letter: the dancer's motion follows from her partner's colour.
+	Sim.Report(EHueFeedbackKind::Info, FString::Printf(TEXT("Receiver -> %s: %s"), HueColor::Label(NewColor), HueColor::MotionMeaning(NewColor)), Cell);
 	RefreshVisuals();
 }
 
@@ -290,7 +291,7 @@ void AHueReceiverBlock::GetPorts(TArray<FHuePort>& OutPorts) const
 
 FString AHueReceiverBlock::GetRuleText() const
 {
-	return FString::Printf(TEXT("Drives the dancer: A repels, B attracts, N brakes; any other colour makes her do its move where she is. Accepts pulses through: %s. Different A / B / N at the same moment cancel."),
+	return FString::Printf(TEXT("Gives the dancer its colour. Her partner is red: R (same colour) pushes her away, C (not red) pulls her back, W (red + cyan at once) brakes; any other colour makes her do its move where she is. Accepts pulses through: %s. Different R / C / W at the same moment cancel."),
 		*DescribeAcceptFaces());
 }
 
@@ -444,7 +445,7 @@ void AHueBrickBlock::ResetBlock()
 FString AHueBrickBlock::GetRuleText() const
 {
 	return FString::Printf(TEXT("A lock: only %s (%s) light breaks it, and that pulse is used up. Other colours are blocked while it stands; once broken, pulses pass straight through. Reset restores it."),
-		HueColor::Label(BrickColor), HueColor::Name(BrickColor));
+		*HueColor::LabelWithSlots(BrickColor), HueColor::Name(BrickColor));
 }
 
 FString AHueBrickBlock::GetStateText() const

@@ -996,11 +996,28 @@ bool FHueboxCoreColorsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("G is a key"), HueColor::DrivesRig(EHueColor::G));
 	TestFalse(TEXT("Y is a key"), HueColor::DrivesRig(EHueColor::Y));
 
-	// A letter always accompanies a colour (accessibility); letters and display colours are pairwise distinct.
-	TestEqual(TEXT("Label(A)"), HueColor::Label(EHueColor::A), TEXT("A"));
-	TestEqual(TEXT("Label(B)"), HueColor::Label(EHueColor::B), TEXT("B"));
-	TestEqual(TEXT("Label(N)"), HueColor::Label(EHueColor::N), TEXT("N"));
+	// A letter always accompanies a colour (accessibility): the colour's own initial (since 11-01; the enum keeps the
+	// GDD names). Letters and display colours are pairwise distinct.
+	TestEqual(TEXT("Label(A) is red"), HueColor::Label(EHueColor::A), TEXT("R"));
+	TestEqual(TEXT("Label(B) is cyan"), HueColor::Label(EHueColor::B), TEXT("C"));
+	TestEqual(TEXT("Label(N) is white"), HueColor::Label(EHueColor::N), TEXT("W"));
 	TestEqual(TEXT("Label(Y)"), HueColor::Label(EHueColor::Y), TEXT("Y"));
+	TestEqual(TEXT("Label(V) is blue"), HueColor::Label(EHueColor::V), TEXT("B"));
+
+	// Primary slots spell the parts in a fixed red-green-blue order; a shift flips every slot (white has no opposite).
+	TestEqual(TEXT("Slots(A)"), HueColor::Slots(EHueColor::A), FString(TEXT("[R--]")));
+	TestEqual(TEXT("Slots(B)"), HueColor::Slots(EHueColor::B), FString(TEXT("[-GB]")));
+	TestEqual(TEXT("Slots(N)"), HueColor::Slots(EHueColor::N), FString(TEXT("[RGB]")));
+	TestEqual(TEXT("LabelWithSlots(Y)"), HueColor::LabelWithSlots(EHueColor::Y), FString(TEXT("Y[RG-]")));
+	for (const EHueColor Color : AllColors)
+	{
+		if (Color != EHueColor::N)
+		{
+			TestEqual(FString::Printf(TEXT("Shift(%s) flips every slot"), ColorName(Color)), HueColor::Slots(HueColor::Shift(Color)),
+				HueColor::SlotsOfMask(HueColor::ToMask(Color) ^ (HueColor::Red | HueColor::Green | HueColor::Blue)));
+		}
+		TestFalse(FString::Printf(TEXT("%s explains what it does to the dancer"), ColorName(Color)), FString(HueColor::MotionMeaning(Color)).IsEmpty());
+	}
 	for (int32 I = 0; I < UE_ARRAY_COUNT(AllColors); ++I)
 	{
 		for (int32 J = I + 1; J < UE_ARRAY_COUNT(AllColors); ++J)
@@ -1555,7 +1572,7 @@ bool FHueboxSimMixerTest::RunTest(const FString& Parameters)
 		Clock.AdvanceTo(0.5);
 		TestFalse(TEXT("A+A: both inputs consumed"), Case.Mixer->IsWaiting());
 		TestTrue(FString::Printf(TEXT("A+A: failure names the matching colours (\"%s\")"), *Case.Mixer->GetLastFailure()),
-			Case.Mixer->GetLastFailure().Contains(TEXT("A+A")));
+			Case.Mixer->GetLastFailure().Contains(TEXT("R[R--]+R[R--] share red")));
 		Clock.AdvanceTo(1.5);
 		ExpectHistory(*this, TEXT("A + A emits no N"), Case.Receiver->GetAppliedHistory(), { MakeEvent(0.75f, EHueColor::B) });
 	}
@@ -1583,7 +1600,7 @@ bool FHueboxSimMixerTest::RunTest(const FString& Parameters)
 		Clock.AdvanceTo(0.5);
 		TestFalse(TEXT("A+G: both inputs consumed"), Case.Mixer->IsWaiting());
 		TestTrue(FString::Printf(TEXT("A+G: no mixer failure (\"%s\")"), *Case.Mixer->GetLastFailure()), Case.Mixer->GetLastFailure().IsEmpty());
-		ExpectFeedback(*this, TEXT("A + G mixes to Y"), Sim->GetRunFeedbackLog(), TEXT("A + G -> Y"), true);
+		ExpectFeedback(*this, TEXT("R + G mixes to Y, spelled in slots"), Sim->GetRunFeedbackLog(), TEXT("R[R--] + G[-G-] -> Y[RG-]"), true);
 		Clock.AdvanceTo(1.5);
 		ExpectHistory(*this, TEXT("The Y is delivered as a move"), Case.Receiver->GetAppliedHistory(),
 			{ MakeEvent(0.75f, EHueColor::B), MakeEvent(1.0f, EHueColor::Y) });
@@ -1661,7 +1678,7 @@ bool FHueboxSimBrickTest::RunTest(const FString& Parameters)
 		ExpectHistory(*this, TEXT("No opener: nothing reaches the receiver"), Case.Receiver->GetAppliedHistory(), {});
 		TestNotNull(FString::Printf(TEXT("No opener: blocked warning at the brick. Log: %s"), *DescribeFeedback(Sim->GetRunFeedbackLog())),
 			FindFeedbackAt(Sim->GetRunFeedbackLog(), EHueFeedbackKind::Warning, FIntPoint(3, 3)));
-		ExpectFeedback(*this, TEXT("No opener: the warning names the key"), Sim->GetRunFeedbackLog(), TEXT("only B (cyan) light breaks it"), true);
+		ExpectFeedback(*this, TEXT("No opener: the warning names the key"), Sim->GetRunFeedbackLog(), TEXT("only C (cyan) light breaks it"), true);
 	}
 
 	// The wrong colour (G) is blocked like the push.
@@ -1686,7 +1703,7 @@ bool FHueboxSimBrickTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Key first: broken at 250 ms"), Case.Brick->GetBrokenAtMs(), static_cast<int64>(250));
 		Clock.AdvanceTo(2.0);
 		ExpectHistory(*this, TEXT("Key first: the push reaches the receiver"), Case.Receiver->GetAppliedHistory(), { MakeEvent(1.5f, EHueColor::A) });
-		ExpectFeedback(*this, TEXT("Key first: the break is reported"), Sim->GetRunFeedbackLog(), TEXT("broken by B"), true);
+		ExpectFeedback(*this, TEXT("Key first: the break is reported"), Sim->GetRunFeedbackLog(), TEXT("broken by C"), true);
 		TestEqual(FString::Printf(TEXT("Key first: no blocked pulses. Log: %s"), *DescribeFeedback(Sim->GetRunFeedbackLog())),
 			CountFeedbackOfKind(Sim->GetRunFeedbackLog(), EHueFeedbackKind::Warning), 0);
 
@@ -2310,7 +2327,7 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 		FLogicRun Unsolved;
 		UTEST_TRUE(TEXT("Unsolved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Unsolved));
 		ExpectHistory(*this, TEXT("Exercise 4 unsolved"), Unsolved.History, {});
-		ExpectFeedback(*this, TEXT("Exercise 4 unsolved: the brick names its key"), Unsolved.Feedback, TEXT("only B (cyan) light breaks it"), true);
+		ExpectFeedback(*this, TEXT("Exercise 4 unsolved: the brick names its key"), Unsolved.Feedback, TEXT("only C (cyan) light breaks it"), true);
 		TestFalse(TEXT("Exercise 4 unsolved: objectives not complete"), EvaluateTutorialObjectives(Fixture, Unsolved.History).bComplete);
 	}
 
@@ -2319,7 +2336,7 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 	{
 		FLogicRun Opened;
 		UTEST_TRUE(TEXT("Opened run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Opened));
-		ExpectFeedback(*this, TEXT("Exercise 4 opened: the spare B broke the brick"), Opened.Feedback, TEXT("broken by B at 0.50s"), true);
+		ExpectFeedback(*this, TEXT("Exercise 4 opened: the spare B broke the brick"), Opened.Feedback, TEXT("broken by C at 0.50s"), true);
 		ExpectHistory(*this, TEXT("Exercise 4 opened: the dancer runs"), Opened.History, { MakeEvent(1.0f, EHueColor::A) });
 		TestFalse(TEXT("Exercise 4 opened: running alone breaks nothing"), EvaluateTutorialObjectives(Fixture, Opened.History).bComplete);
 		TestTrue(TEXT("Exercise 4 opened: she runs into the board"), Predict(Opened.History).bCrashed);
@@ -2330,7 +2347,7 @@ bool FHueboxTutorialExercise4Test::RunTest(const FString& Parameters)
 	{
 		FLogicRun Early;
 		UTEST_TRUE(TEXT("Undelayed run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Early));
-		ExpectFeedback(*this, TEXT("Exercise 4 undelayed: G + A -> Y"), Early.Feedback, TEXT("G + A -> Y"), true);
+		ExpectFeedback(*this, TEXT("Exercise 4 undelayed: G + R -> Y"), Early.Feedback, TEXT("G[-G-] + R[R--] -> Y[RG-]"), true);
 		ExpectHistory(*this, TEXT("Exercise 4 undelayed: push and move at once"), Early.History,
 			{ MakeEvent(1.0f, EHueColor::A), MakeEvent(1.0f, EHueColor::Y) });
 		const FPredictedOutcome Outcome = Predict(Early.History);

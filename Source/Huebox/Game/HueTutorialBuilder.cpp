@@ -295,8 +295,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(0,
 			TEXT("1 \u00B7 Route a Signal"),
-			TEXT("The source fires one B pulse to the right, but a barrier blocks the way. {Supply}, route the pulse up ")
-			TEXT("and around, and turn it into A so the dancer is pushed away from her partner.")));
+			TEXT("The source fires one C pulse (cyan) to the right, but a barrier blocks the way. {Supply}, route the pulse up ")
+			TEXT("and around, and shift it to R (red): her partner is red, and the same colour pushes the dancer away.")));
 
 		Layout.Blocks = {
 			MakeSource(0, 4, EHueDir::East, EHueColor::B),
@@ -311,7 +311,7 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakePickup(EHueModuleType::ColorShift, 1, 260.f, 720.f),
 		};
 
-		FHueObjective TurnsA = MakeObjective(EHueObjectiveType::ReceiverColor, TEXT("Receiver turns A"));
+		FHueObjective TurnsA = MakeObjective(EHueObjectiveType::ReceiverColor, TEXT("Receiver turns R"));
 		TurnsA.Color = EHueColor::A;
 		FHueObjective PastHalfway = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Pushed past the halfway marker"));
 		PastHalfway.TrackFraction = 0.5f;
@@ -330,7 +330,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(1,
 			TEXT("2 \u00B7 Change Motion"),
-			TEXT("Two routes are ready. Route 1 turns B into A (push). Route 2 is a delayed B (pull). Try each alone by ")
+			TEXT("Two routes are ready. Route 1 shifts C into R (push: her partner's colour). Route 2 is a delayed C (pull: ")
+			TEXT("not her partner's colour). Try each alone by ")
 			TEXT("collecting a block, then run both: point at the delay block and press Z/X so the pull arrives later. ")
 			TEXT("Same-time arrivals cancel out.")));
 
@@ -360,8 +361,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 	{
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(2,
 			TEXT("3 \u00B7 Synthesize a Stop"),
-			TEXT("Route 1 starts the dancer. The mixer turns A + B into N, which brakes her - but only if both arrive ")
-			TEXT("within 0.5 s. The B route is longer: place the delay on the A route and tune it.")));
+			TEXT("Route 1 starts the dancer. The mixer adds light: R[R--] + C[-GB] = W[RGB], and white - push and pull at ")
+			TEXT("once - brakes her. Both must arrive within 0.5 s. The C route is longer: place the delay on the R route and tune it.")));
 
 		Layout.Blocks = {
 			// Route 1: A reaches R (West face) at 1.00 s and starts the carriage.
@@ -410,8 +411,8 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			TEXT("4 · Colour Key"),
 			TEXT("A pane of yellow glass stands on the dancer's track. When yellow light (Y) reaches her she strikes, which ")
 			TEXT("shatters the glass from the yellow strike zone in front of it - too early she misses, too late she runs ")
-			TEXT("into it. {Supply}. 1) BRICK B blocks the push and only B breaks it: turn the spare B into it. 2) Light adds ")
-			TEXT("up: A + G = Y - mix where they meet. 3) Delay the Y until she is in the strike zone.")));
+			TEXT("into it. {Supply}. 1) BRICK C blocks the push and only C breaks it: turn the spare C into it. 2) Light adds ")
+			TEXT("up: R[R--] + G[-G-] = Y[RG-] - mix where they meet. 3) Delay the Y until she is in the strike zone.")));
 
 		Layout.Blocks = {
 			// The push: A along row 3 reaches K(3,3) at 0.75 s and R(4,3) (West face) at 1.00 s once K is open. Shipped,
@@ -467,9 +468,9 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(4,
 			TEXT("Level 2 · Exhibition Box"),
 			TEXT("The commission, from one activation: the dancer leaves her partner, breaks the yellow glass, runs past the ")
-			TEXT("far marker, is pulled back and stops in the central spotlight. The base fires four B pulses (east, north, ")
-			TEXT("west, south); the A and G sources are for the yellow. {Supply}. Each job needs its own way into the receiver: ")
-			TEXT("push A, yellow A + G, pull back B, brake A + B = N.")));
+			TEXT("far marker, is pulled back and stops in the central spotlight. The base fires four C pulses (east, north, ")
+			TEXT("west, south); the R and G sources are for the yellow. {Supply}. Each job needs its own way into the receiver: ")
+			TEXT("push R, yellow R + G, pull back C, brake R + C = W.")));
 		Layout.GridSize = FIntPoint(8, 8);
 		// A longer stage than the exercises: the strike zone, the far marker and the stop spotlight do not overlap.
 		Layout.TrackLength = 1400.f;

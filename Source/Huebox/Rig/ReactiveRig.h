@@ -200,6 +200,11 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
 	TObjectPtr<UTextRenderComponent> CarriageLabel;
 
+	/** Why she moves, above her head for a few seconds after a colour reaches her ("R like her partner / pushed away
+	 *  >>"). Follows the performer along the track. */
+	UPROPERTY(VisibleAnywhere, Category = "Hue|Components")
+	TObjectPtr<UTextRenderComponent> ReasonLabel;
+
 	/** Percentage / zone captions of the objective markers (runtime, destroyed together with the markers). */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UTextRenderComponent>> MarkerLabels;
@@ -235,6 +240,9 @@ protected:
 	/** +1 = performer faces away from the anchor, -1 = towards it. */
 	float FacingSign = -1.f;
 	bool bPlayingMoveAnim = false;
+
+	/** Seconds the reason above her head stays up; 0 = hidden. */
+	float ReasonTimeLeft = 0.f;
 
 	/** Seconds left of the key move currently shown (animation and letter); 0 = none. */
 	float KeyActionTimeLeft = 0.f;
@@ -315,6 +323,10 @@ private:
 	void UpdatePerformer(float DeltaSeconds);
 	/** Back to the loop animation that fits the current speed (after a key move, on reset). */
 	void ResumeLoopAnimation();
+	/** Shows why Color makes her move the way she does (see ReasonLabel). */
+	void ShowReason(EHueColor Color);
+	/** Moves the reason with her and hides it when its time is up. */
+	void UpdateReason(float DeltaSeconds);
 	/** Strike-zone glow colour: dim while the board stands, bright once it broke. */
 	FLinearColor StrikeZoneColor(EHueColor KeyColor, bool bLit) const;
 	/** Every board back up, panels visible, zones dim (reset). */

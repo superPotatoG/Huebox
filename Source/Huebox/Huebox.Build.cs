@@ -16,6 +16,9 @@ public class Huebox : ModuleRules
 			"DeveloperSettings"
 		});
 
+		// HUD only: GWhiteTexture for the additive light diagram (canvas triangles with a blend mode).
+		PrivateDependencyModuleNames.Add("RenderCore");
+
 		// Sub-folders are include roots, e.g. #include "Core/HueTypes.h".
 		PublicIncludePaths.Add(ModuleDirectory);
 	}

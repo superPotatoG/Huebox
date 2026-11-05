@@ -75,6 +75,13 @@ Space ─▶ AExhibitManager（Build/Running/Paused/Ended/Complete 状态机）
   - **只有 A / B / N 改变舞者的运动**（`HueColor::DrivesRig`）。其他颜色是“钥匙”：到达接收器后不参与同一时刻的冲突判定，而是在这一时刻结束时交给舞者（`AReactiveRig::PerformKeyAction`），她当场做这个颜色的动作。动作只是皮肤里的一段动画（`PerformerKeyActionAnim`），物理不受影响。
   - **舞台板子**（目标 `BreakBoard`）：舞者的 Tick 和 `PredictMotion` 里都把没打碎的板子当作一道挡板；跑到接触线就停下、播放倒地动画，`HasCrashed()` 变为真，`AExhibitManager` 立即判这一轮失败（`HandleRunFailed`）。钥匙动作只有发生在出拳区（例如 52–74%）时才会打碎同色板子（玻璃）。碎裂只是表现：打中后离得远就先“裂开”，跑到跟前再“碎开”。碎片是运行时用 `NewObject` 创建的方块组件，由 `UPROPERTY` 数组 `ShardMeshes` 持有（GC 不会回收），运动数据放在并行的普通数组里，每帧手动积分（不用物理引擎，结果确定）；寿命到了或重置时 `DestroyComponent`。舞者记录出拳时的位置，`MakeSample` 把它带给棋盘做判定。测试用 `PredictMotion` 离线扫描每个延迟值：会打碎板子，还是撞上去。
 - **砖**（`AHueBrickBlock`）：只有同色的光能打碎，打碎它的那束光会被用掉；其他颜色被挡住。打碎在“同一时刻组”结束时（`OnTimeGroupEnd`）才生效，所以同一毫秒到达的其他脉冲仍会被挡，结果与事件队列的处理顺序无关。重置后恢复原样。
+- **地图和菜单（11-05 起）**：四张地图的路径都写在 `Game/HueLevels.h`，由 `Scripts/create_maps.py` 生成。
+  - `Lvl_MainMenu` 用 `AHueMenuGameMode`：没有玩家角色，场景里生成一个舞者和侧面相机，舞者用计时器循环“推、拉、刹车”。
+  - `Lvl_Tutorial` 放 `AHueTutorialBuilder`，`Lvl_Exhibit` 放 `AHueExhibitBuilder`，`Lvl_Sandbox` 放 `AHueSandboxBuilder` 并用 `AHueSandboxGameMode`。三个 builder 只有默认关卡数据不同（虚函数 `MakeDefaultLayouts`）。
+  - 菜单状态放在 `AHueboxPlayerController`（`EHueMenu`：主菜单 / 暂停）。打开菜单时，它把自己的输入映射以优先级 100 加到玩家输入栈上，比角色的 0 高，菜单按键就会“吃掉”角色的同名按键。暂停时世界的计时器停了，所以菜单按键都设了 `bTriggerWhenPaused`。
+  - HUD 每帧记录按钮的矩形，鼠标点击时控制器问 HUD 点在哪个按钮上（`GetMenuItemAt`）。
+- **沙盒的“无限”道具**：`UHueInventoryComponent::SetUnlimited(true)` 后，拿走一个不会减少，放回去也不会增加。`EHueModuleType` 在末尾追加了 Source / Receiver / Brick / Barrier（追加在末尾，不影响已存的数据），所以固定单元也能进背包。练习里的固定单元是 `bRemovable = false`，照样拿不走。
+- **真实物理扫描**：`-HueSelfTestSweep=N` 让自测在基准解之后，把每个延迟各改 ±N 档单独跑一遍，日志里 `WINDOW` 行列出哪些值能过关。用来确认时间窗在不同帧率下一致（预测模型和 Chaos 有约 1.5% 的差）。
 - **光源底座**（Level 2）：`AHueSourceBlock` 的 `EmitFaces` 列出几个面，运行开始时每个面各发一个脉冲（`UPulseSubsystem::StartRun` 按列表顺序发射，结果确定）；列表为空就是普通光源，只朝 `Facing` 发。端口箭头、小地图和测试都通过同一个 `GetPorts` 读到这些出口，不需要单独处理。
 - **颜色 → 物理**：A 同色相斥，B 异色相吸，均为 `AddForce(..., bAccelChange=true)` 并限速；N 关闭颜色力并把阻尼调高，逐渐刹停。小车用 SixDOF 锁住 Y/Z 平移和全部旋转，只能沿轨道运动。
 - **限制**：最多 16 个活跃信号；每个信号最多 64 次模块操作，超过就判定为循环并终止；每次运行最长 20 s。

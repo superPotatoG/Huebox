@@ -34,6 +34,9 @@ public:
 	/** Play mode of the world's Huebox game mode; Instruction when there is none (tests, other game modes). */
 	static EHuePlayMode GetPlayMode(const UObject* WorldContext);
 
+	/** The sandbox: the first-person maker starts with an unlimited stack of every placeable kind. */
+	static bool HasUnlimitedSupply(const UObject* WorldContext);
+
 	/** Class spawned when an inventory item of Type is placed. Falls back to the native classes. */
 	TSubclassOf<APulseBlock> GetModuleClass(EHueModuleType Type) const;
 	static TSubclassOf<APulseBlock> ResolveModuleClass(const UObject* WorldContext, EHueModuleType Type);
@@ -46,6 +49,10 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Hue|Mode")
 	EHuePlayMode PlayMode = EHuePlayMode::Instruction;
+
+	/** See HasUnlimitedSupply. */
+	UPROPERTY(EditDefaultsOnly, Category = "Hue|Mode")
+	bool bUnlimitedSupply = false;
 
 	/** Top-down build / side watch pawn (AHueBuilderPawn). */
 	UPROPERTY(EditDefaultsOnly, Category = "Hue|Mode")
@@ -75,4 +82,17 @@ protected:
 	/** Builder found in or spawned into the level (the level also references it; kept for clarity / debugging). */
 	UPROPERTY(Transient)
 	TObjectPtr<AHueTutorialBuilder> TutorialBuilder;
+};
+
+/**
+ * Map Lvl_Sandbox: Sandbox play mode (first person) with the unlimited supply, on the sandbox board
+ * (AHueSandboxBuilder, also spawned when the level has no builder).
+ */
+UCLASS()
+class HUEBOX_API AHueSandboxGameMode : public AHueboxGameMode
+{
+	GENERATED_BODY()
+
+public:
+	AHueSandboxGameMode();
 };

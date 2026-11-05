@@ -45,6 +45,7 @@
 #include "Player/HueInteractable.h"
 #include "Player/HueInventoryComponent.h"
 #include "Player/HueModulePickup.h"
+#include "Player/HueboxPlayerController.h"
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
@@ -2405,9 +2406,9 @@ bool FHueboxLevel2SampleTest::RunTest(const FString& Parameters)
 	using namespace HueboxTests;
 
 	TArray<FHueBoardLayout> Layouts;
-	AHueTutorialBuilder::MakeDefaultTutorialLayouts(Layouts);
-	UTEST_TRUE(TEXT("Four exercises and the Level 2 sample"), Layouts.Num() >= 5);
-	const FHueBoardLayout& Layout = Layouts[4];
+	AHueTutorialBuilder::MakeLevel2Layouts(Layouts);
+	UTEST_EQUAL(TEXT("Level 2 is one board (its own map)"), Layouts.Num(), 1);
+	const FHueBoardLayout& Layout = Layouts[0];
 	CheckTutorialLayoutData(*this, Layout);
 	TestEqual(TEXT("Level 2: 8 x 8 grid (GDD 4)"), Layout.GridSize, FIntPoint(8, 8));
 
@@ -2480,7 +2481,7 @@ bool FHueboxLevel2SampleTest::RunTest(const FString& Parameters)
 	// Baseline solution.
 	AHueTutorialBuilder::InstallSolution(Fixture.Board, Layout);
 	const TArray<FHueColorEvent> ExpectedSolved =
-		{ MakeEvent(0.75f, EHueColor::A), MakeEvent(4.25f, EHueColor::Y), MakeEvent(4.75f, EHueColor::B), MakeEvent(8.0f, EHueColor::N) };
+		{ MakeEvent(0.75f, EHueColor::A), MakeEvent(4.25f, EHueColor::Y), MakeEvent(4.75f, EHueColor::B), MakeEvent(8.25f, EHueColor::N) };
 	FLogicRun Solved;
 	UTEST_TRUE(TEXT("Solved run"), RunTutorialLogic(*this, Sim, Fixture, 1.0 / 30.0, Solved));
 	ExpectHistory(*this, TEXT("Level 2 solved"), Solved.History, ExpectedSolved);
@@ -2536,7 +2537,7 @@ bool FHueboxLevel2SampleTest::RunTest(const FString& Parameters)
 		return FString::Join(Working, TEXT(" "));
 	};
 	TestEqual(TEXT("Level 2: the yellow delays that work"), SweepDelay(FIntPoint(3, 1), TEXT("yellow")), FString(TEXT("2.25 2.50 2.75")));
-	TestEqual(TEXT("Level 2: the brake delays that work"), SweepDelay(FIntPoint(2, 4), TEXT("brake")), FString(TEXT("5.25 5.50")));
+	TestEqual(TEXT("Level 2: the brake delays that work (baseline and one step either side)"), SweepDelay(FIntPoint(2, 4), TEXT("brake")), FString(TEXT("5.25 5.50 5.75")));
 	const FString PullBack = SweepDelay(FIntPoint(5, 2), TEXT("pull-back"));
 	TestTrue(FString::Printf(TEXT("Level 2: the baseline pull-back delay works (%s)"), *PullBack), PullBack.Contains(TEXT("2.50")));
 	return true;
@@ -3029,6 +3030,144 @@ bool FHueboxSimPulseSnapshotsTest::RunTest(const FString& Parameters)
 // =============================================================================================================
 // Build tool + board trays (Instruction mode)
 // =============================================================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxBuildSandboxSupplyTest, "Huebox.Build.SandboxSupply", HUEBOX_TEST_FLAGS)
+bool FHueboxBuildSandboxSupplyTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	FHueTestWorld TestWorld;
+	UPulseSubsystem* Sim = TestWorld.GetSim();
+	UTEST_NOT_NULL(TEXT("Pulse subsystem"), Sim);
+	Sim->SetVisualsEnabled(false);
+
+	AHueBoard* Board = TestWorld.SpawnBoard(FVector::ZeroVector, FIntPoint(6, 6));
+	UTEST_NOT_NULL(TEXT("Board"), Board);
+	AReactiveRig* Rig = TestWorld.SpawnRig(FVector(-200.f, -170.f, 0.f), 1000.f);
+	UTEST_NOT_NULL(TEXT("Rig"), Rig);
+	Board->SetRig(Rig);
+
+	// The sandbox supply: unlimited, every placeable kind (the character stocks it the same way).
+	UHueInventoryComponent* Supply = Board->GetTray();
+	UTEST_NOT_NULL(TEXT("Inventory"), Supply);
+	Supply->SetNumSlots(8);
+	Supply->SetUnlimited(true);
+	for (const EHueModuleType Type : { EHueModuleType::Turn, EHueModuleType::Source, EHueModuleType::Receiver, EHueModuleType::Brick })
+	{
+		TestEqual(FString::Printf(TEXT("Unlimited: %s opens a stack"), *ModuleName(Type)), Supply->AddItem(Type, 1), 1);
+	}
+	TestTrue(TEXT("Unlimited: a stack never runs out"), Supply->RemoveFromSlot(0, 1) && Supply->RemoveFromSlot(0, 5));
+	TestEqual(TEXT("Unlimited: the stack keeps its count"), Supply->CountOf(EHueModuleType::Turn), 1);
+	TestTrue(TEXT("Unlimited: anything of a stocked type fits back"), Supply->CanAdd(EHueModuleType::Turn, 50));
+	TestTrue(TEXT("HueModule: sources are fixed units"), HueModule::IsFixedUnit(EHueModuleType::Source) && !HueModule::IsFixedUnit(EHueModuleType::Turn));
+
+	UHueBuildToolComponent* Tool = SpawnBuildTool(TestWorld, Supply);
+	UTEST_NOT_NULL(TEXT("Build tool"), Tool);
+
+	// A source: placed removable with the preview facing, Z / X walk its colour, the supply keeps its stack.
+	Supply->SelectSlot(1);
+	Tool->SetPreviewFacing(EHueDir::East);
+	Tool->SetTargetCell(Board, FIntPoint(1, 1));
+	UTEST_TRUE(TEXT("Place a source"), Tool->TryPlaceSelected());
+	AHueSourceBlock* Source = Cast<AHueSourceBlock>(Board->GetBlockAt(FIntPoint(1, 1)));
+	UTEST_NOT_NULL(TEXT("A source stands on the cell"), Source);
+	TestTrue(TEXT("A sandbox source is removable"), Source->IsRemovable());
+	TestEqual(TEXT("Placing took nothing from the supply"), Supply->CountOf(EHueModuleType::Source), 1);
+	TestColor(*this, TEXT("New sources emit C"), Source->GetEmitColor(), EHueColor::B);
+	Tool->RefreshTarget();
+	Tool->AdjustTargetDelay(+1);
+	TestColor(*this, TEXT("X on a source: the next colour"), Source->GetEmitColor(), EHueColor::A);
+	Tool->AdjustTargetDelay(-1);
+	Tool->AdjustTargetDelay(-1);
+	TestColor(*this, TEXT("Z twice: back past C to W (the ring wraps)"), Source->GetEmitColor(), EHueColor::N);
+	Tool->AdjustTargetDelay(+2);
+	TestColor(*this, TEXT("Colour ring both ways"), Source->GetEmitColor(), EHueColor::A);
+
+	// A receiver: drives the board's rig as soon as it is placed.
+	Supply->SelectSlot(2);
+	Tool->SetTargetCell(Board, FIntPoint(4, 1));
+	UTEST_TRUE(TEXT("Place a receiver"), Tool->TryPlaceSelected());
+	AHueReceiverBlock* Receiver = Cast<AHueReceiverBlock>(Board->GetBlockAt(FIntPoint(4, 1)));
+	UTEST_NOT_NULL(TEXT("A receiver stands on the cell"), Receiver);
+	TestTrue(TEXT("The placed receiver drives the board's rig"), Receiver->GetRig() == Rig);
+
+	// The two of them work: R east from (1,1) reaches the receiver at 0.75 s.
+	UTEST_TRUE(TEXT("Run started"), StartBoardRun(Sim, Board));
+	FSimClock Clock(Sim);
+	Clock.AdvanceTo(1.0);
+	ExpectHistory(*this, TEXT("Sandbox source -> sandbox receiver"), Receiver->GetAppliedHistory(), { MakeEvent(0.75f, EHueColor::A) });
+	Sim->StopAndClear();
+
+	// Collecting a sandbox source puts it back without growing the stack.
+	const TWeakObjectPtr<AHueSourceBlock> WeakSource(Source);
+	Source = nullptr;
+	Tool->SetTargetCell(Board, FIntPoint(1, 1));
+	Tool->SecondaryAction();
+	TestFalse(TEXT("RMB collected the sandbox source"), WeakSource.IsValid());
+	TestEqual(TEXT("The supply keeps one stack of sources"), Supply->CountOf(EHueModuleType::Source), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxLevelsLayoutsTest, "Huebox.Levels.Layouts", HUEBOX_TEST_FLAGS)
+bool FHueboxLevelsLayoutsTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	// Each map's builder builds its own level: the tutorial table keeps its four exercises only.
+	TArray<FHueBoardLayout> Tutorial;
+	AHueTutorialBuilder::MakeDefaultTutorialLayouts(Tutorial);
+	TestEqual(TEXT("The tutorial has four exercises"), Tutorial.Num(), 4);
+	for (const FHueBoardLayout& Layout : Tutorial)
+	{
+		TestEqual(FString::Printf(TEXT("%s is a 6 x 6 exercise"), *Layout.Name), Layout.GridSize, FIntPoint(6, 6));
+	}
+
+	TArray<FHueBoardLayout> Sandbox;
+	AHueTutorialBuilder::MakeSandboxLayouts(Sandbox);
+	UTEST_EQUAL(TEXT("The sandbox is one board"), Sandbox.Num(), 1);
+	TestEqual(TEXT("The sandbox board is 10 x 10"), Sandbox[0].GridSize, FIntPoint(10, 10));
+	TestEqual(TEXT("The sandbox has no objectives"), Sandbox[0].Objectives.Num(), 0);
+	TestTrue(TEXT("The sandbox's own blocks are removable"),
+		Sandbox[0].Blocks.Num() > 0 && !Sandbox[0].Blocks.ContainsByPredicate([](const FHueBlockSpec& Spec) { return !Spec.bRemovable; }));
+
+	// The builder subclasses carry those layouts as their defaults (what the maps place).
+	TestEqual(TEXT("AHueExhibitBuilder: one board"), GetDefault<AHueExhibitBuilder>()->GetLayouts().Num(), 1);
+	TestEqual(TEXT("AHueSandboxBuilder: one board"), GetDefault<AHueSandboxBuilder>()->GetLayouts().Num(), 1);
+	TestEqual(TEXT("AHueTutorialBuilder: four boards"), GetDefault<AHueTutorialBuilder>()->GetLayouts().Num(), 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxMenuItemsTest, "Huebox.Menu.Items", HUEBOX_TEST_FLAGS)
+bool FHueboxMenuItemsTest::RunTest(const FString& Parameters)
+{
+	auto Actions = [](EHueMenu Menu)
+	{
+		TArray<FHueMenuItem> Items;
+		AHueboxPlayerController::GetMenuItemsFor(Menu, Items);
+		TArray<EHueMenuAction> Result;
+		for (const FHueMenuItem& Item : Items)
+		{
+			Result.Add(Item.Action);
+		}
+		return Result;
+	};
+
+	const TArray<EHueMenuAction> Main = Actions(EHueMenu::Main);
+	TestTrue(TEXT("Title screen: both levels, the sandbox and quit, in that order"),
+		Main == TArray<EHueMenuAction>({ EHueMenuAction::OpenTutorial, EHueMenuAction::OpenExhibit, EHueMenuAction::OpenSandbox, EHueMenuAction::Quit }));
+	const TArray<EHueMenuAction> Pause = Actions(EHueMenu::Pause);
+	TestTrue(TEXT("Pause menu: resume, restart, main menu, quit"),
+		Pause == TArray<EHueMenuAction>({ EHueMenuAction::Resume, EHueMenuAction::RestartLevel, EHueMenuAction::MainMenu, EHueMenuAction::Quit }));
+	TestEqual(TEXT("No menu: no entries"), Actions(EHueMenu::None).Num(), 0);
+
+	TArray<FHueMenuItem> Items;
+	AHueboxPlayerController::GetMenuItemsFor(EHueMenu::Main, Items);
+	for (const FHueMenuItem& Item : Items)
+	{
+		TestFalse(FString::Printf(TEXT("'%s' has a label and a hint"), *Item.Label), Item.Label.IsEmpty() || Item.Hint.IsEmpty());
+	}
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxBuildTrayPlaceAndCollectTest, "Huebox.Build.TrayPlaceAndCollect", HUEBOX_TEST_FLAGS)
 bool FHueboxBuildTrayPlaceAndCollectTest::RunTest(const FString& Parameters)

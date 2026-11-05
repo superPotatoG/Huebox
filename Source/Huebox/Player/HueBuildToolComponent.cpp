@@ -1,5 +1,6 @@
 #include "Player/HueBuildToolComponent.h"
 
+#include "Blocks/HueFixedBlocks.h"
 #include "Blocks/HueModuleBlocks.h"
 #include "Blocks/PulseBlock.h"
 #include "Components/StaticMeshComponent.h"
@@ -473,7 +474,22 @@ void UHueBuildToolComponent::RotateTargetOrPreview(int32 Steps)
 
 void UHueBuildToolComponent::AdjustTargetDelay(int32 Steps)
 {
-	AHueDelayBlock* Delay = (Target.Kind == EHueTargetKind::Block) ? Cast<AHueDelayBlock>(Target.Block.Get()) : nullptr;
+	APulseBlock* TargetBlock = (Target.Kind == EHueTargetKind::Block) ? Target.Block.Get() : nullptr;
+
+	// A removable source or brick (the sandbox hands them out) changes colour instead.
+	const bool bColored = TargetBlock && TargetBlock->IsRemovable() && (TargetBlock->IsA<AHueSourceBlock>() || TargetBlock->IsA<AHueBrickBlock>());
+	if (bColored)
+	{
+		if (!IsEditingAllowed())
+		{
+			ShowMessage(EHueFeedbackKind::Warning, HueBuildToolText::ResetBeforeEditing);
+			return;
+		}
+		CycleTargetColor(*TargetBlock, Steps);
+		return;
+	}
+
+	AHueDelayBlock* Delay = Cast<AHueDelayBlock>(TargetBlock);
 	if (!Delay)
 	{
 		ShowMessage(EHueFeedbackKind::Info, TEXT("Aim at a delay block to change its delay (Z / X)"));
@@ -500,6 +516,35 @@ void UHueBuildToolComponent::AdjustTargetDelay(int32 Steps)
 	}
 }
 
+void UHueBuildToolComponent::CycleTargetColor(APulseBlock& Block, int32 Steps)
+{
+	// Every colour in a fixed order, so Z and X walk the same ring both ways.
+	static const EHueColor Ring[] = { EHueColor::B, EHueColor::A, EHueColor::G, EHueColor::V, EHueColor::Y, EHueColor::M, EHueColor::N };
+	constexpr int32 RingSize = UE_ARRAY_COUNT(Ring);
+	auto Next = [Steps](EHueColor Current)
+	{
+		int32 Index = 0;
+		for (int32 I = 0; I < RingSize; ++I)
+		{
+			Index = Ring[I] == Current ? I : Index;
+		}
+		return Ring[((Index + Steps) % RingSize + RingSize) % RingSize];
+	};
+
+	if (AHueSourceBlock* Source = Cast<AHueSourceBlock>(&Block))
+	{
+		Source->SetEmitColor(Next(Source->GetEmitColor()));
+		ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Source emits %s (%s)"),
+			*HueColor::LabelWithSlots(Source->GetEmitColor()), HueColor::Name(Source->GetEmitColor())));
+	}
+	else if (AHueBrickBlock* Brick = Cast<AHueBrickBlock>(&Block))
+	{
+		Brick->SetBrickColor(Next(Brick->GetBrickColor()));
+		ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Brick opens for %s (%s)"),
+			*HueColor::LabelWithSlots(Brick->GetBrickColor()), HueColor::Name(Brick->GetBrickColor())));
+	}
+}
+
 void UHueBuildToolComponent::CycleSelection(int32 Delta)
 {
 	if (UHueInventoryComponent* ActiveInventory = Inventory.Get())
@@ -510,7 +555,9 @@ void UHueBuildToolComponent::CycleSelection(int32 Delta)
 
 void UHueBuildToolComponent::SelectSlot(int32 Index)
 {
-	if (UHueInventoryComponent* ActiveInventory = Inventory.Get())
+	// Number keys go up to 9, trays have fewer slots: a key past the last slot does nothing.
+	UHueInventoryComponent* ActiveInventory = Inventory.Get();
+	if (ActiveInventory && Index >= 0 && Index < ActiveInventory->GetNumSlots())
 	{
 		ActiveInventory->SelectSlot(Index);
 	}
@@ -558,6 +605,11 @@ bool UHueBuildToolComponent::TryPlaceSelected()
 	{
 		ShowMessage(EHueFeedbackKind::Warning, HueBuildToolText::CannotPlace);
 		return false;
+	}
+	// A placed receiver drives the board's performer, like the layout's own.
+	if (AHueReceiverBlock* Receiver = Cast<AHueReceiverBlock>(Block))
+	{
+		Receiver->SetRig(Board->GetRig());
 	}
 
 	// Transaction: the inventory pays for the block that now exists; if it cannot, undo the placement.

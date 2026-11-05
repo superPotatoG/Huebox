@@ -76,6 +76,18 @@ public:
 	int32 GetNumSlots() const { return NumSlots; }
 	int32 GetMaxStack() const { return MaxStack; }
 
+	/**
+	 * Unlimited supply (sandbox): a stack never runs out - taking from it leaves it as it is - and an item of a type
+	 * that already has a stack goes back into it for free. New types still need a free slot.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hue|Inventory")
+	void SetUnlimited(bool bInUnlimited);
+	UFUNCTION(BlueprintPure, Category = "Hue|Inventory")
+	bool IsUnlimited() const { return bUnlimited; }
+
+	/** Changes the slot count (clamped 1..9); stacks beyond it are dropped. */
+	void SetNumSlots(int32 InNumSlots);
+
 	UPROPERTY(BlueprintAssignable, Category = "Hue|Inventory")
 	FOnHueInventoryChanged OnInventoryChanged;
 
@@ -91,6 +103,12 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, Category = "Hue|Inventory")
 	int32 SelectedIndex = 0;
+
+	UPROPERTY(EditAnywhere, Category = "Hue|Inventory")
+	bool bUnlimited = false;
+
+	/** Unlimited supply: index of a stack of Type, or INDEX_NONE. */
+	int32 FindStack(EHueModuleType Type) const;
 
 	/** Sizes Slots to NumSlots if needed (non-const callers). Const queries treat missing slots as empty. */
 	void EnsureSlots();

@@ -25,7 +25,8 @@ namespace HueFixedBlocksPrivate
 AHueSourceBlock::AHueSourceBlock()
 {
 	bRemovable = false;
-	ModuleType = EHueModuleType::None;
+	// Fixed in the exercises (bRemovable false); the type lets a sandbox-placed one go back into the supply.
+	ModuleType = EHueModuleType::Source;
 	BlockDisplayName = TEXT("Source");
 	BodyScale = HueFixedBlocksPrivate::FixedTileScale;
 	ApplyBodyLayout();
@@ -139,7 +140,7 @@ void AHueSourceBlock::NotifyEmitted(int64 TimeMs)
 AHueReceiverBlock::AHueReceiverBlock()
 {
 	bRemovable = false;
-	ModuleType = EHueModuleType::None;
+	ModuleType = EHueModuleType::Receiver;
 	BlockDisplayName = TEXT("Receiver");
 	// Permissive default for receivers placed by hand; layouts always call SetAcceptFaces.
 	AcceptFaces = { EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South };
@@ -345,7 +346,7 @@ FString AHueReceiverBlock::DescribeAcceptFaces() const
 AHueBarrierBlock::AHueBarrierBlock()
 {
 	bRemovable = false;
-	ModuleType = EHueModuleType::None;
+	ModuleType = EHueModuleType::Barrier;
 	BlockDisplayName = TEXT("Barrier");
 	BaseColor = HueFixedBlocksPrivate::BarrierColor;
 	BodyScale = HueFixedBlocksPrivate::BarrierTileScale;
@@ -378,7 +379,7 @@ FString AHueBarrierBlock::GetStateText() const
 AHueBrickBlock::AHueBrickBlock()
 {
 	bRemovable = false;
-	ModuleType = EHueModuleType::None;
+	ModuleType = EHueModuleType::Brick;
 	BlockDisplayName = TEXT("Brick");
 	BodyScale = HueFixedBlocksPrivate::BrickStandingScale;
 	ApplyBodyLayout();

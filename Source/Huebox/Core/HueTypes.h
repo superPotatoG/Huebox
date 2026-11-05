@@ -46,7 +46,11 @@ enum class EHueDir : uint8
 	South
 };
 
-/** Placeable module kinds that can live in the player's inventory. */
+/**
+ * Placeable kinds that can live in an inventory. The four modules are what exercises hand out; the fixed units after
+ * them are placeable only from the sandbox's unlimited supply (in the exercises they stand fixed). Saved data:
+ * append new values at the end.
+ */
 UENUM(BlueprintType)
 enum class EHueModuleType : uint8
 {
@@ -54,7 +58,11 @@ enum class EHueModuleType : uint8
 	Turn,
 	ColorShift,
 	Delay,
-	Mixer
+	Mixer,
+	Source,
+	Receiver,
+	Brick,
+	Barrier
 };
 
 /** Exhibit / attempt state machine (GDD: Build, Run, Paused, Complete + Ended for failed/timed-out runs). */
@@ -317,6 +325,8 @@ namespace HueModule
 	HUEBOX_API const TCHAR* DisplayName(EHueModuleType Type);
 	/** Short label used on hotbar / pickups, e.g. "TURN". */
 	HUEBOX_API const TCHAR* ShortName(EHueModuleType Type);
+	/** Source, receiver, brick or barrier: fixed in the exercises, placeable only from the sandbox supply. */
+	HUEBOX_API bool IsFixedUnit(EHueModuleType Type);
 	/** Body colour used for the module's placeholder mesh. */
 	HUEBOX_API FLinearColor BodyColor(EHueModuleType Type);
 	/** Per-type accent (gray Turn, violet Colour shift, tan Delay, teal Mixer) for the Sandbox supply: floor pickups

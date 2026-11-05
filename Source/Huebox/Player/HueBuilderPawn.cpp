@@ -1003,14 +1003,19 @@ void AHueBuilderPawn::HandleToggleHelp()
 
 void AHueBuilderPawn::HandlePauseMenu()
 {
-	bPauseMenuOpen = !bPauseMenuOpen;
-
+	// The controller owns the pause menu (it also closes it: its menu keys sit above this pawn's while it is open).
 	if (AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetController()))
 	{
-		PC->SetPauseMenuOpen(bPauseMenuOpen);
+		PC->TogglePauseMenu();
 	}
 	else
 	{
-		UGameplayStatics::SetGamePaused(this, bPauseMenuOpen);
+		UGameplayStatics::SetGamePaused(this, !UGameplayStatics::IsGamePaused(this));
 	}
+}
+
+bool AHueBuilderPawn::IsPauseMenuOpen() const
+{
+	const AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetController());
+	return PC && PC->GetMenu() == EHueMenu::Pause;
 }

@@ -59,7 +59,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Hue|Exhibit")
 	FOnHueRunStateChanged OnStateChanged;
 
-	/** When the -HueSelfTest command line switch is present, every board installs its baseline solution and runs. */
+	/**
+	 * When the -HueSelfTest command line switch is present, every board installs its baseline solution and runs.
+	 * With -HueSelfTestSweep[=N] (default 2) each delay of each solution is then also run N steps (0.25 s) either side
+	 * of its baseline, the others kept, in real physics: the log lists which settings still complete (the timing
+	 * windows). Sweep runs never count as failures.
+	 */
 	void BeginSelfTest();
 
 protected:
@@ -99,11 +104,25 @@ protected:
 	TWeakObjectPtr<UPulseSubsystem> Sim;
 
 	// Self-test (graybox validation, GDD section 4/8) -------------------------------------------------------
+	/** One self-test run: a board's baseline solution, optionally with one delay changed (a sweep run). */
+	struct FSelfTestCase
+	{
+		int32 BoardIndex = INDEX_NONE;
+		/** Sweep runs: the solution delay that is changed, and to what. INDEX_NONE = the baseline run. */
+		FIntPoint DelayCell = FIntPoint(INDEX_NONE, INDEX_NONE);
+		float DelaySeconds = 0.f;
+		bool IsSweep() const { return DelayCell.X != INDEX_NONE; }
+	};
+
 	bool bSelfTest = false;
-	int32 SelfTestBoardIndex = INDEX_NONE;
+	TArray<FSelfTestCase> SelfTestCases;
+	int32 SelfTestCaseIndex = INDEX_NONE;
 	float SelfTestWait = 0.f;
 	int32 SelfTestPassed = 0;
 	int32 SelfTestFailed = 0;
+	/** Sweep: "board D(x,y)" -> the delay settings that completed (and the ones tried), in run order. */
+	TMap<FString, TArray<FString>> SweepWorking;
+	TMap<FString, TArray<FString>> SweepTried;
 
 private:
 	/** Returns the cached subsystem, resolving it (and binding OnFeedback once) if needed. */
@@ -118,6 +137,8 @@ private:
 	void StartNextSelfTestBoard();
 	void FinishSelfTestBoard(bool bPassed, const FString& Reason);
 	void FinishSelfTest();
+	/** "board D(x,y)" key of a sweep case. */
+	FString SweepKey(const FSelfTestCase& Case) const;
 
 	/** Manager-side run clock (same 1/30 s clamp as the simulation); fallback when the simulation is not running. */
 	double RunClockSeconds = 0.0;

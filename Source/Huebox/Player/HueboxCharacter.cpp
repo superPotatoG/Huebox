@@ -8,7 +8,12 @@
 #include "Engine/World.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Core/HueboxSettings.h"
+#include "EngineUtils.h"
 #include "Game/ExhibitManager.h"
+#include "Game/HueboxGameMode.h"
+#include "Rig/HuePerformerSkin.h"
+#include "Rig/ReactiveRig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
@@ -104,6 +109,24 @@ void AHueboxCharacter::BeginPlay()
 	EnsureInputConfig();
 	// The controller may already be set (e.g. a pawn placed in the level with auto-possess).
 	AddMappingContext();
+
+	// The sandbox map: one never-ending stack of every placeable kind, fixed units included.
+	if (Inventory && AHueboxGameMode::HasUnlimitedSupply(this))
+	{
+		static const EHueModuleType Supply[] =
+		{
+			EHueModuleType::Turn, EHueModuleType::ColorShift, EHueModuleType::Delay, EHueModuleType::Mixer,
+			EHueModuleType::Source, EHueModuleType::Receiver, EHueModuleType::Brick, EHueModuleType::Barrier,
+		};
+		Inventory->SetNumSlots(UE_ARRAY_COUNT(Supply));
+		Inventory->ClearAll();
+		Inventory->SetUnlimited(true);
+		for (const EHueModuleType Type : Supply)
+		{
+			Inventory->AddItem(Type, 1);
+		}
+		Inventory->SelectSlot(0);
+	}
 }
 
 void AHueboxCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -281,6 +304,7 @@ void AHueboxCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 	Input->BindAction(Config->ToggleHelp, ETriggerEvent::Started, this, &AHueboxCharacter::HandleToggleHelp);
 	// PauseMenu has bTriggerWhenPaused, so this binding also works while the world is paused.
 	Input->BindAction(Config->PauseMenu, ETriggerEvent::Started, this, &AHueboxCharacter::HandlePauseMenu);
+	Input->BindAction(Config->CycleSkin, ETriggerEvent::Started, this, &AHueboxCharacter::HandleCycleSkin);
 }
 
 // ---- Input handlers -----------------------------------------------------------------------------------------
@@ -468,16 +492,51 @@ void AHueboxCharacter::HandleToggleHelp()
 
 void AHueboxCharacter::HandlePauseMenu()
 {
-	bPauseMenuOpen = !bPauseMenuOpen;
-
+	// The controller owns the pause menu (it also closes it: its menu keys sit above this pawn's while it is open).
 	if (AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetController()))
 	{
-		PC->SetPauseMenuOpen(bPauseMenuOpen);
+		PC->TogglePauseMenu();
 	}
 	else
 	{
-		UGameplayStatics::SetGamePaused(this, bPauseMenuOpen);
+		UGameplayStatics::SetGamePaused(this, !UGameplayStatics::IsGamePaused(this));
 	}
+}
+
+bool AHueboxCharacter::IsPauseMenuOpen() const
+{
+	const AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetController());
+	return PC && PC->GetMenu() == EHueMenu::Pause;
+}
+
+void AHueboxCharacter::HandleCycleSkin()
+{
+	TArray<TSubclassOf<UHuePerformerSkin>> Skins;
+	UHueboxSettings::GetAvailableSkins(Skins);
+	UWorld* World = GetWorld();
+	if (Skins.Num() == 0 || !World)
+	{
+		return;
+	}
+
+	// The next skin after the one the first rig wears (its own, or the project default), applied to every rig.
+	TSubclassOf<UHuePerformerSkin> Current = UHueboxSettings::GetDefaultSkinClass();
+	for (TActorIterator<AReactiveRig> It(World); It; ++It)
+	{
+		if (It->GetSkinClass())
+		{
+			Current = It->GetSkinClass();
+		}
+		break;
+	}
+	const int32 CurrentIndex = Skins.IndexOfByKey(Current);
+	const TSubclassOf<UHuePerformerSkin> Next = Skins[(CurrentIndex + 1) % Skins.Num()];
+	for (TActorIterator<AReactiveRig> It(World); It; ++It)
+	{
+		It->SetSkin(Next);
+	}
+	ShowMessage(EHueFeedbackKind::Info, FString::Printf(TEXT("Skin: %s (K for the next one)"),
+		*GetDefault<UHuePerformerSkin>(Next)->DisplayName.ToString()));
 }
 
 // ---- Targeting ----------------------------------------------------------------------------------------------

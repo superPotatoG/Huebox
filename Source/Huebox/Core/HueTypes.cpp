@@ -26,11 +26,13 @@ namespace HueTypesPrivate
 		return (Index >= 0 && Index < NumColors) ? Index : static_cast<int32>(EHueColor::N);
 	}
 
-	/** Module index in [0, 4]; anything invalid is treated as None. */
+	constexpr int32 NumModuleTypes = 9;
+
+	/** Module index in [0, 8]; anything invalid is treated as None. */
 	static int32 ModuleIndex(EHueModuleType Type)
 	{
 		const int32 Index = static_cast<int32>(Type);
-		return (Index >= 0 && Index <= 4) ? Index : 0;
+		return (Index >= 0 && Index < NumModuleTypes) ? Index : 0;
 	}
 }
 
@@ -221,28 +223,43 @@ bool HueColor::DrivesRig(EHueColor Color)
 
 const TCHAR* HueModule::DisplayName(EHueModuleType Type)
 {
-	static const TCHAR* const Names[5] = { TEXT("None"), TEXT("Turn"), TEXT("Colour shift"), TEXT("Delay"), TEXT("Mixer") };
+	static const TCHAR* const Names[HueTypesPrivate::NumModuleTypes] =
+		{ TEXT("None"), TEXT("Turn"), TEXT("Colour shift"), TEXT("Delay"), TEXT("Mixer"),
+		  TEXT("Source"), TEXT("Receiver"), TEXT("Brick"), TEXT("Barrier") };
 	return Names[HueTypesPrivate::ModuleIndex(Type)];
 }
 
 const TCHAR* HueModule::ShortName(EHueModuleType Type)
 {
-	static const TCHAR* const Names[5] = { TEXT("-"), TEXT("TURN"), TEXT("SHIFT"), TEXT("DELAY"), TEXT("MIX") };
+	static const TCHAR* const Names[HueTypesPrivate::NumModuleTypes] =
+		{ TEXT("-"), TEXT("TURN"), TEXT("SHIFT"), TEXT("DELAY"), TEXT("MIX"),
+		  TEXT("SOURCE"), TEXT("RECEIVER"), TEXT("BRICK"), TEXT("BARRIER") };
 	return Names[HueTypesPrivate::ModuleIndex(Type)];
+}
+
+bool HueModule::IsFixedUnit(EHueModuleType Type)
+{
+	return Type == EHueModuleType::Source || Type == EHueModuleType::Receiver
+		|| Type == EHueModuleType::Brick || Type == EHueModuleType::Barrier;
 }
 
 FLinearColor HueModule::BodyColor(EHueModuleType Type)
 {
 	// "2D white props": every module is a white tile told apart by its dark label (TURN, SHIFT, D 1.25s, MIX)
-	// and port markers, so colour on the grid always means a signal colour (sources, receivers, pulses).
+	// and port markers, so colour on the grid always means a signal colour (sources, receivers, pulses). Fixed units
+	// colour their own tiles; these entries are only the fallback.
 	static const FLinearColor ModuleWhite(0.92f, 0.92f, 0.90f);
-	static const FLinearColor Colors[5] =
+	static const FLinearColor Colors[HueTypesPrivate::NumModuleTypes] =
 	{
 		FLinearColor(0.50f, 0.50f, 0.50f),	// None
 		ModuleWhite,						// Turn
 		ModuleWhite,						// Colour shift
 		ModuleWhite,						// Delay
-		ModuleWhite							// Mixer
+		ModuleWhite,						// Mixer
+		ModuleWhite,						// Source
+		ModuleWhite,						// Receiver
+		ModuleWhite,						// Brick
+		FLinearColor(0.04f, 0.04f, 0.045f)	// Barrier
 	};
 	return Colors[HueTypesPrivate::ModuleIndex(Type)];
 }
@@ -250,13 +267,17 @@ FLinearColor HueModule::BodyColor(EHueModuleType Type)
 FLinearColor HueModule::AccentColor(EHueModuleType Type)
 {
 	// The pre-2D body colours: the Sandbox supply (floor pickups, hotbar) keeps telling the types apart by colour.
-	static const FLinearColor Colors[5] =
+	static const FLinearColor Colors[HueTypesPrivate::NumModuleTypes] =
 	{
 		FLinearColor(0.50f, 0.50f, 0.50f),	// None
 		FLinearColor(0.55f, 0.55f, 0.55f),	// Turn: gray
 		FLinearColor(0.45f, 0.30f, 0.60f),	// Colour shift: violet
 		FLinearColor(0.80f, 0.70f, 0.45f),	// Delay: tan
-		FLinearColor(0.15f, 0.45f, 0.45f)	// Mixer: teal
+		FLinearColor(0.15f, 0.45f, 0.45f),	// Mixer: teal
+		FLinearColor(0.04f, 0.72f, 1.00f),	// Source: cyan, like the default C source
+		FLinearColor(0.92f, 0.92f, 0.92f),	// Receiver: white, like its N / W rest state
+		FLinearColor(0.70f, 0.35f, 0.20f),	// Brick: brick red-brown
+		FLinearColor(0.12f, 0.12f, 0.13f)	// Barrier: near black
 	};
 	return Colors[HueTypesPrivate::ModuleIndex(Type)];
 }

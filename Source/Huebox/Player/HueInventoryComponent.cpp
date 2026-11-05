@@ -43,6 +43,27 @@ void UHueInventoryComponent::Broadcast()
 	OnInventoryChanged.Broadcast();
 }
 
+void UHueInventoryComponent::SetUnlimited(bool bInUnlimited)
+{
+	if (bUnlimited != bInUnlimited)
+	{
+		bUnlimited = bInUnlimited;
+		Broadcast();
+	}
+}
+
+void UHueInventoryComponent::SetNumSlots(int32 InNumSlots)
+{
+	NumSlots = FMath::Clamp(InNumSlots, 1, 9);
+	EnsureSlots();
+	Broadcast();
+}
+
+int32 UHueInventoryComponent::FindStack(EHueModuleType Type) const
+{
+	return Slots.IndexOfByPredicate([Type](const FHueInventorySlot& Slot) { return !Slot.IsEmpty() && Slot.Type == Type; });
+}
+
 int32 UHueInventoryComponent::AddItem(EHueModuleType Type, int32 Count)
 {
 	if (Type == EHueModuleType::None || Count <= 0)
@@ -51,6 +72,24 @@ int32 UHueInventoryComponent::AddItem(EHueModuleType Type, int32 Count)
 	}
 
 	EnsureSlots();
+
+	// Unlimited: an existing stack takes everything back without counting; a new type opens one stack of 1.
+	if (bUnlimited)
+	{
+		if (FindStack(Type) != INDEX_NONE)
+		{
+			return Count;
+		}
+		const int32 Free = Slots.IndexOfByPredicate([](const FHueInventorySlot& Slot) { return Slot.IsEmpty(); });
+		if (Free == INDEX_NONE)
+		{
+			return 0;
+		}
+		Slots[Free].Type = Type;
+		Slots[Free].Count = 1;
+		Broadcast();
+		return Count;
+	}
 
 	const int32 StackCap = FMath::Max(1, MaxStack);
 	int32 Remaining = Count;
@@ -104,6 +143,19 @@ bool UHueInventoryComponent::CanAdd(EHueModuleType Type, int32 Count) const
 	const int32 StackCap = FMath::Max(1, MaxStack);
 	const int32 WantedSlots = FMath::Clamp(NumSlots, 1, 9);
 
+	if (bUnlimited)
+	{
+		// Anything fits that has a stack already or a free slot to open one.
+		for (int32 Index = 0; Index < WantedSlots; ++Index)
+		{
+			if (!Slots.IsValidIndex(Index) || Slots[Index].IsEmpty() || Slots[Index].Type == Type)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	// int64: NumSlots * MaxStack must not overflow for large designer values.
 	int64 Free = 0;
 	for (int32 Index = 0; Index < WantedSlots; ++Index)
@@ -141,6 +193,11 @@ bool UHueInventoryComponent::RemoveFromSlot(int32 Index, int32 Count)
 	}
 
 	FHueInventorySlot& Slot = Slots[Index];
+	if (bUnlimited)
+	{
+		// A stack of the unlimited supply never runs out.
+		return !Slot.IsEmpty();
+	}
 	// All-or-nothing: never take a partial amount.
 	if (Slot.IsEmpty() || Slot.Count < Count)
 	{
@@ -165,6 +222,11 @@ bool UHueInventoryComponent::RemoveItem(EHueModuleType Type, int32 Count)
 	}
 
 	EnsureSlots();
+
+	if (bUnlimited)
+	{
+		return FindStack(Type) != INDEX_NONE;
+	}
 
 	// All-or-nothing: check the total before touching any slot.
 	if (CountOf(Type) < Count)

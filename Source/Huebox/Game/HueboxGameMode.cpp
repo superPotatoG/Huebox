@@ -8,6 +8,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 
+#include "Blocks/HueFixedBlocks.h"
 #include "Blocks/HueModuleBlocks.h"
 #include "Game/ExhibitManager.h"
 #include "Game/HueTutorialBuilder.h"
@@ -27,6 +28,10 @@ namespace HueGameModePrivate
 		case EHueModuleType::ColorShift: return AHueColorShiftBlock::StaticClass();
 		case EHueModuleType::Delay:      return AHueDelayBlock::StaticClass();
 		case EHueModuleType::Mixer:      return AHueMixerBlock::StaticClass();
+		case EHueModuleType::Source:     return AHueSourceBlock::StaticClass();
+		case EHueModuleType::Receiver:   return AHueReceiverBlock::StaticClass();
+		case EHueModuleType::Brick:      return AHueBrickBlock::StaticClass();
+		case EHueModuleType::Barrier:    return AHueBarrierBlock::StaticClass();
 		case EHueModuleType::None:
 		default:                         return TSubclassOf<APulseBlock>();
 		}
@@ -115,6 +120,22 @@ EHuePlayMode AHueboxGameMode::GetPlayMode(const UObject* WorldContext)
 	}
 	// Tests / other game modes: the default experience.
 	return EHuePlayMode::Instruction;
+}
+
+bool AHueboxGameMode::HasUnlimitedSupply(const UObject* WorldContext)
+{
+	const UWorld* World = (WorldContext && GEngine)
+		? GEngine->GetWorldFromContextObject(WorldContext, EGetWorldErrorMode::ReturnNull)
+		: nullptr;
+	const AHueboxGameMode* GameMode = World ? Cast<AHueboxGameMode>(World->GetAuthGameMode()) : nullptr;
+	return GameMode && GameMode->bUnlimitedSupply;
+}
+
+AHueSandboxGameMode::AHueSandboxGameMode()
+{
+	PlayMode = EHuePlayMode::Sandbox;
+	bUnlimitedSupply = true;
+	TutorialBuilderClass = AHueSandboxBuilder::StaticClass();
 }
 
 void AHueboxGameMode::StartPlay()

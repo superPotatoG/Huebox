@@ -57,7 +57,8 @@ public:
 	UHueBuildToolComponent* GetBuildTool() const { return BuildTool; }
 	AHueStageCamera* GetStageCamera() const { return StageCamera; }
 	bool IsHelpVisible() const { return bShowHelp; }
-	bool IsPauseMenuOpen() const { return bPauseMenuOpen; }
+	/** The controller's pause menu is open. */
+	bool IsPauseMenuOpen() const;
 
 	// ---- Pure math (unit-tested) ------------------------------------------------------------------------------
 	/** Camera height above the board so that an AreaSize (cm, X by Y) rectangle fits a perspective view looking
@@ -178,5 +179,4 @@ protected:
 	FVector CameraGoal = FVector::ZeroVector;
 	EHueViewMode ViewMode = EHueViewMode::Build;
 	bool bShowHelp = true;
-	bool bPauseMenuOpen = false;
 };

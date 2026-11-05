@@ -36,12 +36,11 @@ namespace HueTutorialPrivate
 	/** Default cell size of AHueBoard (used only to probe the floor before boards exist). */
 	constexpr float ProbeCellSize = 100.f;
 
-	/** Ground slab (relative to the builder): 120 m x 50 m under the four exercises (boards at x 0 .. 6000, stages
-	 *  to ~6300), Level 2 (board at x 7200 .. 8000, stage to ~8700) and the player spawn; the west edge stays where it
-	 *  was for three boards. */
-	constexpr float GroundCenterX = 3400.f;
+	/** Ground slab (relative to the builder): along X it covers every board and stage of the layouts plus these
+	 *  margins (west: the player spawn side), across a fixed 50 m band. Four exercises: 108 m, x -2600 .. 8200. */
+	constexpr float GroundWestMargin = 2400.f;
+	constexpr float GroundEastMargin = 2000.f;
 	constexpr float GroundCenterY = 600.f;
-	constexpr float GroundHalfX = 6000.f;
 	constexpr float GroundHalfY = 2500.f;
 	/** Invisible boundary walls stand this far inside the slab edges. */
 	constexpr float WallInset = 100.f;
@@ -140,6 +139,10 @@ namespace HueTutorialPrivate
 		case EHueBlockKind::ColorShift: return EHueModuleType::ColorShift;
 		case EHueBlockKind::Delay:      return EHueModuleType::Delay;
 		case EHueBlockKind::Mixer:      return EHueModuleType::Mixer;
+		case EHueBlockKind::Source:     return EHueModuleType::Source;
+		case EHueBlockKind::Receiver:   return EHueModuleType::Receiver;
+		case EHueBlockKind::Brick:      return EHueModuleType::Brick;
+		case EHueBlockKind::Barrier:    return EHueModuleType::Barrier;
 		default:                        return EHueModuleType::None;
 		}
 	}
@@ -227,7 +230,35 @@ namespace HueTutorialPrivate
 	 * pawns but ignores the Visibility channel, so interaction and drop traces pass through. Spawned actors are added
 	 * to OutSpawned (the builder's UPROPERTY list), which also destroys them with the builder.
 	 */
-	void SpawnBoundaryWalls(UWorld* World, AActor* Owner, const FVector& FloorCenter, TArray<TObjectPtr<AActor>>& OutSpawned)
+	/** X extent of the ground slab (relative to the builder): every grid and stage of Layouts, plus the margins. */
+	struct FGroundSpan
+	{
+		float CenterX = 0.f;
+		float HalfX = 0.f;
+	};
+
+	FGroundSpan ComputeGroundSpan(const TArray<FHueBoardLayout>& Layouts)
+	{
+		float MinX = 0.f;
+		float MaxX = 0.f;
+		bool bAny = false;
+		for (const FHueBoardLayout& Layout : Layouts)
+		{
+			const float GridMax = Layout.Origin.X + Layout.GridSize.X * ProbeCellSize;
+			const float StageMin = Layout.Origin.X + Layout.RigOffset.X;
+			const float StageMax = StageMin + Layout.TrackLength;
+			const float LayoutMin = FMath::Min(Layout.Origin.X, StageMin);
+			const float LayoutMax = FMath::Max(GridMax, StageMax);
+			MinX = bAny ? FMath::Min(MinX, LayoutMin) : LayoutMin;
+			MaxX = bAny ? FMath::Max(MaxX, LayoutMax) : LayoutMax;
+			bAny = true;
+		}
+		MinX -= GroundWestMargin;
+		MaxX += GroundEastMargin;
+		return FGroundSpan{ 0.5f * (MinX + MaxX), 0.5f * (MaxX - MinX) };
+	}
+
+	void SpawnBoundaryWalls(UWorld* World, AActor* Owner, const FVector& FloorCenter, float GroundHalfX, TArray<TObjectPtr<AActor>>& OutSpawned)
 	{
 		const float HalfX = GroundHalfX - WallInset;
 		const float HalfY = GroundHalfY - WallInset;
@@ -457,15 +488,22 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakeDelay(4, 2, EHueDir::North, 2.5f, true),
 		};
 	}
+}
 
-	// ---- Level 2: exhibition box (sample) -------------------------------------------------------------------------
+void AHueTutorialBuilder::MakeLevel2Layouts(TArray<FHueBoardLayout>& OutLayouts)
+{
+	using namespace HueTutorialPrivate;
+
+	OutLayouts.Reset();
+
+	// ---- Level 2: exhibition box ------------------------------------------------------------------------------------
 	// GDD 4: one activation, the whole performance. Four jobs reach one receiver through its four faces: the push (A),
 	// the yellow move (A + G), the pull back (B) and the brake (A + B = N). The source base fires B through all four
 	// faces at once; the yellow needs the separate A and G sources (four B pulses cannot make three A and two B).
 	// No new rule: routing (ex 1), shift and delay (ex 2), mixing (ex 3) and the colour key (ex 4) together.
-	// Graybox sample on the same table for now; it moves to its own map with the menus (week 5).
+	// Its own map (Lvl_Exhibit, AHueExhibitBuilder), so the board sits at the builder's origin.
 	{
-		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(4,
+		FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(0,
 			TEXT("Level 2 · Exhibition Box"),
 			TEXT("The commission, from one activation: the dancer leaves her partner, breaks the yellow glass, runs past the ")
 			TEXT("far marker, is pulled back and stops in the central spotlight. The base fires four C pulses (east, north, ")
@@ -506,22 +544,26 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 		FHueObjective PastFar = MakeObjective(EHueObjectiveType::PassFarMarker, TEXT("Runs past the far marker"));
 		PastFar.TrackFraction = 0.857f;
 		FHueObjective Stop = MakeObjective(EHueObjectiveType::StopInZone, TEXT("Stops in the central spotlight for 1 s"));
-		// GDD: target width 15% of the track, at most 2% of the track per second for 1 s.
-		Stop.ZoneMin = 0.425f;
-		Stop.ZoneMax = 0.575f;
+		// GDD: target width 15% of the track, at most 2% of the track per second for 1 s. Placed so the brake works at
+		// 5.50 s and one step either side, both in the prediction (rests 0.531 / 0.477 / 0.424) and in real physics
+		// (~0.015 further on, -HueSelfTestSweep at 30 / 60 / 120 FPS); 5.00 s and 6.00 s stay outside.
+		Stop.ZoneMin = 0.42f;
+		Stop.ZoneMax = 0.57f;
 		Stop.MaxSpeedFraction = 0.02f;
 		Stop.HoldSeconds = 1.0f;
 		Layout.Objectives = { Leave, YellowBoard, PastFar, Stop };
 
-		// Baseline (17 modules), receiver deliveries A 0.75 s, Y 4.25 s, B 4.75 s, N 8.00 s:
+		// Baseline (17 modules), receiver deliveries A 0.75 s, Y 4.25 s, B 4.75 s, N 8.25 s:
 		// Push: C(3,3) South turns the south B into A -> R north face at 0.75 s.
 		// Yellow: T(1,1) W + T(1,0) E bring A along row 0 to M(3,0) North (1.00 s), T(4,1) S + T(4,0) N bring G (1.25 s);
 		//   Y leaves at 1.25 s, D(3,1) North 2.50 s -> R south face at 4.25 s (move at ~0.68, glass at 0.80).
 		// Pull back: T(6,5) W + T(6,2) N take the east B round the barriers, D(5,2) West 2.50 s -> R east face at 4.75 s
 		//   (she turns at ~0.79 and peaks at ~0.92, past the far marker).
 		// Brake: C(3,6) North makes the north pulse A, T(3,7) W -> M(2,7) South east input (0.75 s); the west B goes
-		//   T(1,5) E + T(1,7) S -> west input (1.25 s, dt 0.50 s); N down column 2, D(2,4) South 5.25 s, T(2,2) E ->
-		//   R west face at 8.00 s, on her way back at full speed -> rests at ~0.53.
+		//   T(1,5) E + T(1,7) S -> west input (1.25 s, dt 0.50 s); N down column 2, D(2,4) South 5.50 s, T(2,2) E ->
+		//   R west face at 8.25 s, on her way back at full speed -> rests at ~0.48.
+		// Real-physics windows (-HueSelfTestSweep=3 at 30 / 60 / 120 FPS, others at baseline): yellow 2.25-2.75, brake
+		// 5.25-5.75, pull back 2.50-3.25 (from 3.00 on she runs into the far end stop first and is pulled back from it).
 		Layout.SolutionBlocks = {
 			MakeBlock(EHueBlockKind::ColorShift, 3, 3, EHueDir::South, true),
 
@@ -541,10 +583,61 @@ void AHueTutorialBuilder::MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& Ou
 			MakeBlock(EHueBlockKind::Turn, 1, 5, EHueDir::East, true),
 			MakeBlock(EHueBlockKind::Turn, 1, 7, EHueDir::South, true),
 			MakeBlock(EHueBlockKind::Mixer, 2, 7, EHueDir::South, true),
-			MakeDelay(2, 4, EHueDir::South, 5.25f, true),
+			MakeDelay(2, 4, EHueDir::South, 5.5f, true),
 			MakeBlock(EHueBlockKind::Turn, 2, 2, EHueDir::East, true),
 		};
 	}
+}
+
+void AHueTutorialBuilder::MakeSandboxLayouts(TArray<FHueBoardLayout>& OutLayouts)
+{
+	using namespace HueTutorialPrivate;
+
+	OutLayouts.Reset();
+
+	// ---- Sandbox: one large free board ------------------------------------------------------------------------------
+	// No objectives, no tray: the first-person maker brings an unlimited supply of every block (sources, receivers,
+	// bricks and barriers included). One source and one receiver stand ready - both removable - so the very first run
+	// already does something.
+	FHueBoardLayout& Layout = OutLayouts.Add_GetRef(MakeLayout(0,
+		TEXT("Sandbox"),
+		TEXT("Free building: every block is unlimited, sources and receivers too. LMB places / collects, Q/E rotates, ")
+		TEXT("Z/X sets a delay or a source / brick colour, K changes the performer's skin. Space runs, R resets.")));
+	Layout.GridSize = FIntPoint(10, 10);
+	Layout.TrackLength = 1400.f;
+
+	FHueBlockSpec Source = MakeSource(0, 5, EHueDir::East, EHueColor::B);
+	Source.bRemovable = true;
+	FHueBlockSpec Receiver = MakeReceiver(6, 5, { EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South });
+	Receiver.bRemovable = true;
+	Layout.Blocks = { Source, Receiver };
+}
+
+void AHueTutorialBuilder::MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const
+{
+	MakeDefaultTutorialLayouts(OutLayouts);
+}
+
+// ---- Level 2 / sandbox builders -------------------------------------------------------------------------------
+
+AHueExhibitBuilder::AHueExhibitBuilder()
+{
+	MakeLevel2Layouts(Layouts);
+}
+
+void AHueExhibitBuilder::MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const
+{
+	MakeLevel2Layouts(OutLayouts);
+}
+
+AHueSandboxBuilder::AHueSandboxBuilder()
+{
+	MakeSandboxLayouts(Layouts);
+}
+
+void AHueSandboxBuilder::MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const
+{
+	MakeSandboxLayouts(OutLayouts);
 }
 
 // ---- Static helpers -------------------------------------------------------------------------------------------
@@ -557,7 +650,6 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	}
 
 	TSubclassOf<APulseBlock> BlockClass;
-	bool bFixedKind = true;
 	switch (Spec.Kind)
 	{
 	case EHueBlockKind::Source:
@@ -577,7 +669,6 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 	case EHueBlockKind::Delay:
 	case EHueBlockKind::Mixer:
 		// Modules go through the game mode catalogue so Blueprint art classes replace the placeholders.
-		bFixedKind = false;
 		BlockClass = AHueboxGameMode::ResolveModuleClass(Board, HueTutorialPrivate::ToModuleType(Spec.Kind));
 		break;
 	default:
@@ -591,8 +682,9 @@ APulseBlock* AHueTutorialBuilder::SpawnBlockFromSpec(AHueBoard* Board, const FHu
 		return nullptr;
 	}
 
-	// Sources, receivers, barriers and bricks are always fixed; modules follow the spec.
-	const bool bRemovable = !bFixedKind && Spec.bRemovable;
+	// The spec decides for every kind: the exercises keep their sources, receivers, barriers and bricks fixed (the
+	// default), the sandbox hands out removable ones.
+	const bool bRemovable = Spec.bRemovable;
 	APulseBlock* Block = Board->SpawnBlock(BlockClass, Spec.Cell, Spec.Facing, bRemovable);
 	if (!Block)
 	{
@@ -725,8 +817,8 @@ void AHueTutorialBuilder::BeginPlay()
 
 	if (Layouts.Num() == 0)
 	{
-		UE_LOG(LogHuebox, Log, TEXT("HueTutorialBuilder: no layouts set - using the default Level 1 exercises"));
-		MakeDefaultTutorialLayouts(Layouts);
+		UE_LOG(LogHuebox, Log, TEXT("%s: no layouts set - using its default layouts"), *GetClass()->GetName());
+		MakeDefaultLayouts(Layouts);
 	}
 
 	// Environment first: the floor probe must not see our own boards.
@@ -925,9 +1017,10 @@ void AHueTutorialBuilder::SpawnEnvironmentIfMissing()
 		{
 			// Partially covered: sink the slab 2 cm so it never z-fights with the level's own floor.
 			const float TopZ = Covered > 0 ? -2.f : 0.f;
+			const HueTutorialPrivate::FGroundSpan Span = HueTutorialPrivate::ComputeGroundSpan(Layouts);
 			const FTransform GroundTransform(FRotator::ZeroRotator,
-				Base + FVector(HueTutorialPrivate::GroundCenterX, HueTutorialPrivate::GroundCenterY, TopZ - 10.f),
-				FVector(2.f * HueTutorialPrivate::GroundHalfX / 100.f, 2.f * HueTutorialPrivate::GroundHalfY / 100.f, 0.2f));
+				Base + FVector(Span.CenterX, HueTutorialPrivate::GroundCenterY, TopZ - 10.f),
+				FVector(2.f * Span.HalfX / 100.f, 2.f * HueTutorialPrivate::GroundHalfY / 100.f, 0.2f));
 
 			AStaticMeshActor* Ground = World->SpawnActorDeferred<AStaticMeshActor>(AStaticMeshActor::StaticClass(), GroundTransform,
 				this, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
@@ -959,7 +1052,7 @@ void AHueTutorialBuilder::SpawnEnvironmentIfMissing()
 			if (Covered == 0)
 			{
 				HueTutorialPrivate::SpawnBoundaryWalls(World, this,
-					Base + FVector(HueTutorialPrivate::GroundCenterX, HueTutorialPrivate::GroundCenterY, TopZ), SpawnedActors);
+					Base + FVector(Span.CenterX, HueTutorialPrivate::GroundCenterY, TopZ), Span.HalfX, SpawnedActors);
 				if (AWorldSettings* WorldSettings = World->GetWorldSettings())
 				{
 					WorldSettings->KillZ = FMath::Max(WorldSettings->KillZ, static_cast<float>(Base.Z + TopZ) - HueTutorialPrivate::KillDepth);

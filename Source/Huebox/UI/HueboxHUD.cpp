@@ -15,6 +15,7 @@
 #include "Player/HueBuildToolComponent.h"
 #include "Player/HueBuilderPawn.h"
 #include "Player/HueboxCharacter.h"
+#include "Player/HueboxPlayerController.h"
 #include "Player/HueInteractable.h"
 #include "Player/HueInventoryComponent.h"
 #include "Player/HueModulePickup.h"
@@ -300,6 +301,10 @@ namespace HueHUD
 		case EHueModuleType::ColorShift: return TEXT("X"); // "C" is cyan light now
 		case EHueModuleType::Delay:      return TEXT("D");
 		case EHueModuleType::Mixer:      return TEXT("M");
+		case EHueModuleType::Source:     return TEXT("S");
+		case EHueModuleType::Receiver:   return TEXT("@");
+		case EHueModuleType::Brick:      return TEXT("#");
+		case EHueModuleType::Barrier:    return TEXT("=");
 		case EHueModuleType::None:
 		default:                         return TEXT("");
 		}
@@ -424,9 +429,10 @@ namespace HueHUD
 		{ TEXT("Mouse"),      TEXT("Look") },
 		{ TEXT("Left mouse"), TEXT("Collect pickup / collect block / place module") },
 		{ TEXT("Q / E"),      TEXT("Rotate target block or preview -90 / +90") },
-		{ TEXT("Z / X"),      TEXT("Delay of targeted delay block -/+ 0.25 s") },
-		{ TEXT("Wheel, 1-6"), TEXT("Select hotbar slot") },
+		{ TEXT("Z / X"),      TEXT("Delay -/+ 0.25 s, or the colour of a source / brick") },
+		{ TEXT("Wheel, 1-8"), TEXT("Select hotbar slot") },
 		{ TEXT("G"),          TEXT("Drop one selected module") },
+		{ TEXT("K"),          TEXT("Next performer skin") },
 		{ TEXT("Space"),      TEXT("Start / pause / resume the run of this board") },
 		{ TEXT("R"),          TEXT("Stop and reset the attempt (layout kept)") },
 		{ TEXT("H"),          TEXT("Toggle this help") },
@@ -530,6 +536,14 @@ void AHueboxHUD::DrawHUD()
 	const EHueRunState RunState = Manager ? Manager->GetState() : EHueRunState::Build;
 	bRunFinished = RunState == EHueRunState::Complete || RunState == EHueRunState::Ended;
 
+	// The title screen shows only its menu (and the stage behind it).
+	const AHueboxPlayerController* MenuPC = Cast<AHueboxPlayerController>(GetOwningPlayerController());
+	if (MenuPC && MenuPC->GetMenu() == EHueMenu::Main)
+	{
+		DrawMenu();
+		return;
+	}
+
 	DrawBoardPanel(Pawn, Manager, Context);
 
 	switch (Context)
@@ -563,10 +577,6 @@ void AHueboxHUD::DrawHUD()
 			DrawCrosshairAndPrompt(Tool, Pawn);
 		}
 
-		if (Character->IsPauseMenuOpen())
-		{
-			DrawPauseOverlay();
-		}
 		break;
 	}
 
@@ -605,11 +615,6 @@ void AHueboxHUD::DrawHUD()
 		{
 			DrawHelp(Context);
 		}
-
-		if (Builder->IsPauseMenuOpen())
-		{
-			DrawPauseOverlay();
-		}
 		break;
 	}
 
@@ -618,6 +623,9 @@ void AHueboxHUD::DrawHUD()
 		DrawFeedback(Manager);
 		break;
 	}
+
+	// Title screen or pause menu: on top of everything else.
+	DrawMenu();
 }
 
 AHueboxHUD::EHudContext AHueboxHUD::ResolveContext(const APawn* Pawn)
@@ -980,7 +988,8 @@ void AHueboxHUD::DrawHotbar(const UHueBuildToolComponent* Tool)
 			const FVector2f NameSize = HueHUD::Measure(*this, Name, Font, S);
 			DrawText(Name, HueHUD::WithAlpha(HueHUD::TextColor, Alpha), SX + (SlotW - NameSize.X) * 0.5f, Y0 + SlotH * 0.40f - NameSize.Y * 0.5f, Font, S);
 
-			const FString CountText = FString::Printf(TEXT("x%d"), Slot.Count);
+			// The sandbox supply never runs out.
+			const FString CountText = Inventory->IsUnlimited() ? FString(TEXT("free")) : FString::Printf(TEXT("x%d"), Slot.Count);
 			const FVector2f CountSize = HueHUD::Measure(*this, CountText, Font, S);
 			DrawText(CountText, HueHUD::WithAlpha(HueHUD::AmberColor, Alpha), SX + (SlotW - CountSize.X) * 0.5f, Y0 + SlotH * 0.72f - CountSize.Y * 0.5f, Font, S);
 		}
@@ -1011,7 +1020,7 @@ void AHueboxHUD::DrawHotbar(const UHueBuildToolComponent* Tool)
 		// Only send the player looking for supplies when the tray really is empty.
 		const bool bHasModules = HueHUD::HasAnyModule(*Inventory);
 		Info = bHasModules
-			? FString::Printf(TEXT("Slot empty - select a module (1-6 / wheel)    Q/E rotate: facing %s"), FacingName)
+			? FString::Printf(TEXT("Slot empty - select a module (number keys / wheel)    Q/E rotate: facing %s"), FacingName)
 			: FString::Printf(TEXT("Empty slot - collect modules with LMB    Q/E rotate: facing %s"), FacingName);
 		InfoColorValue = HueHUD::DimColor;
 	}
@@ -1785,30 +1794,112 @@ void AHueboxHUD::DrawHelp(EHudContext Context)
 	}
 }
 
-void AHueboxHUD::DrawPauseOverlay()
+void AHueboxHUD::DrawMenu()
 {
-	const float S = UIScale;
-	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.6f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
-
-	const FString Title = TEXT("PAUSED");
-	const float TitleScale = 2.f * S;
-	const FVector2f TitleSize = HueHUD::Measure(*this, Title, HueHUD::HeadingFont(), TitleScale);
-	const float CX = Canvas->ClipX * 0.5f;
-	const float CY = Canvas->ClipY * 0.5f;
-	DrawText(Title, HueHUD::AmberColor, CX - TitleSize.X * 0.5f, CY - TitleSize.Y - 20.f * S, HueHUD::HeadingFont(), TitleScale);
-
-	TArray<HueHUD::FLine> Lines;
-	HueHUD::AddLine(Lines, TEXT("Esc / P    Resume"), HueHUD::TextColor);
-	HueHUD::AddLine(Lines, TEXT("The simulation, the carriage and the run timer are frozen."), HueHUD::DimColor);
-	HueHUD::AddLine(Lines, TEXT("Close the window to quit (in the editor: Shift+F1, then Stop)."), HueHUD::DimColor);
-
-	float MaxWidth = 0.f;
-	for (const HueHUD::FLine& Line : Lines)
+	MenuItemRects.Reset();
+	AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetOwningPlayerController());
+	if (!PC || !PC->IsMenuOpen())
 	{
-		MaxWidth = FMath::Max(MaxWidth, static_cast<float>(HueHUD::Measure(*this, Line.Text, HueHUD::BodyFont(), S).X));
+		LastMenuMouse = FVector2D(-1.0, -1.0);
+		return;
 	}
-	const float BoxWidth = MaxWidth + 2.f * HueHUD::Pad * S;
-	HueHUD::DrawPanel(*this, Lines, CX - BoxWidth * 0.5f, CY, S, MaxWidth, false);
+
+	TArray<FHueMenuItem> Items;
+	PC->GetMenuItems(Items);
+	if (Items.Num() == 0)
+	{
+		return;
+	}
+
+	const float S = UIScale;
+	const bool bTitle = PC->GetMenu() == EHueMenu::Main;
+	UFont* Font = HueHUD::HeadingFont();
+	const float ItemWidth = 420.f * S;
+	const float ItemHeight = 46.f * S;
+	const float ItemGap = 10.f * S;
+	const float ItemScale = 1.15f * S;
+
+	// Title screen: a column on the left over the stage, where the dancer performs on the right. Pause: centred over
+	// the frozen level, dimmed.
+	float Left = 0.f;
+	float Top = 0.f;
+	if (bTitle)
+	{
+		Left = 80.f * S;
+		const FString Title = TEXT("HUEBOX");
+		const float TitleScale = 3.2f * S;
+		const float TitleTop = Canvas->ClipY * 0.16f;
+		const FVector2f TitleSize = HueHUD::Measure(*this, Title, Font, TitleScale);
+		// The backing ends just below the key line (entries, hint and keys are laid out below).
+		const float ContentBottom = TitleTop + TitleSize.Y + 70.f * S + Items.Num() * (ItemHeight + ItemGap) + 56.f * S;
+		DrawRect(HueHUD::Backing, Left - 20.f * S, TitleTop - 14.f * S, ItemWidth + 40.f * S, ContentBottom - TitleTop + 14.f * S);
+		DrawText(Title, HueHUD::AmberColor, Left, TitleTop, Font, TitleScale);
+		DrawText(TEXT("A Little Departure"), HueHUD::TextColor, Left + 4.f * S, TitleTop + TitleSize.Y, Font, 1.2f * S);
+		Top = TitleTop + TitleSize.Y + 70.f * S;
+	}
+	else
+	{
+		DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.6f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+		const FString Title = TEXT("PAUSED");
+		const float TitleScale = 2.f * S;
+		const FVector2f TitleSize = HueHUD::Measure(*this, Title, Font, TitleScale);
+		const float BlockHeight = TitleSize.Y + 24.f * S + Items.Num() * (ItemHeight + ItemGap);
+		Left = (Canvas->ClipX - ItemWidth) * 0.5f;
+		const float TitleTop = (Canvas->ClipY - BlockHeight) * 0.5f;
+		// One box behind title, entries, hint and keys (the keys line is wider than the entries).
+		const float BoxWidth = ItemWidth + 140.f * S;
+		DrawRect(HueHUD::Backing, (Canvas->ClipX - BoxWidth) * 0.5f, TitleTop - 14.f * S, BoxWidth, BlockHeight + 70.f * S);
+		DrawText(Title, HueHUD::AmberColor, (Canvas->ClipX - TitleSize.X) * 0.5f, TitleTop, Font, TitleScale);
+		Top = TitleTop + TitleSize.Y + 24.f * S;
+	}
+
+	// The mouse takes the selection over only while it moves over an entry, so keys and mouse never fight.
+	float MouseX = -1.f;
+	float MouseY = -1.f;
+	const bool bHasMouse = PC->GetMousePosition(MouseX, MouseY);
+	const FVector2D Mouse(MouseX, MouseY);
+	const bool bMouseMoved = bHasMouse && !Mouse.Equals(LastMenuMouse, 0.5);
+	LastMenuMouse = bHasMouse ? Mouse : FVector2D(-1.0, -1.0);
+
+	for (int32 Index = 0; Index < Items.Num(); ++Index)
+	{
+		const float Y = Top + Index * (ItemHeight + ItemGap);
+		const FBox2D Rect(FVector2D(Left, Y), FVector2D(Left + ItemWidth, Y + ItemHeight));
+		MenuItemRects.Add(Rect);
+		if (bMouseMoved && Rect.IsInside(Mouse))
+		{
+			PC->SetMenuSelection(Index);
+		}
+	}
+
+	const int32 Selected = PC->GetMenuSelection();
+	for (int32 Index = 0; Index < Items.Num(); ++Index)
+	{
+		const FBox2D& Rect = MenuItemRects[Index];
+		const bool bSelected = Index == Selected;
+		const float X = static_cast<float>(Rect.Min.X);
+		const float Y = static_cast<float>(Rect.Min.Y);
+		DrawRect(bSelected ? HueHUD::WithAlpha(HueHUD::AmberColor, 0.9f) : FLinearColor(0.f, 0.f, 0.f, 0.7f), X, Y, ItemWidth, ItemHeight);
+		HueHUD::DrawFrame(*this, X, Y, ItemWidth, ItemHeight, 2.f * S, bSelected ? HueHUD::AmberColor : HueHUD::MapLine);
+		const FVector2f TextSize = HueHUD::Measure(*this, Items[Index].Label, Font, ItemScale);
+		DrawText(Items[Index].Label, bSelected ? HueHUD::TileInk : HueHUD::TextColor, X + 16.f * S, Y + (ItemHeight - TextSize.Y) * 0.5f, Font, ItemScale);
+	}
+
+	// What the selected entry does, then the keys.
+	const float BelowItems = Top + Items.Num() * (ItemHeight + ItemGap) + 8.f * S;
+	if (Items.IsValidIndex(Selected))
+	{
+		DrawText(Items[Selected].Hint, HueHUD::TextColor, Left, BelowItems, HueHUD::BodyFont(), S);
+	}
+	const TCHAR* Keys = bTitle
+		? TEXT("W / S or mouse: choose     Enter / Space / click: start")
+		: TEXT("W / S or mouse: choose     Enter / Space / click: select     Esc / P: resume");
+	DrawText(Keys, HueHUD::DimColor, Left, BelowItems + 24.f * S, HueHUD::BodyFont(), S);
+}
+
+int32 AHueboxHUD::GetMenuItemAt(const FVector2D& ScreenPosition) const
+{
+	return MenuItemRects.IndexOfByPredicate([&ScreenPosition](const FBox2D& Rect) { return Rect.IsInside(ScreenPosition); });
 }
 
 float AHueboxHUD::DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale, bool bBacking)

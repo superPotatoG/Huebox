@@ -17,7 +17,8 @@ class UInputMappingContext;
  *   Left mouse ......... Interact (collect pickup / collect block / place selected module)
  *   Q / E .............. Rotate target block or placement preview -90 / +90 degrees
  *   Z / X .............. Delay of targeted delay block -0.25 s / +0.25 s
- *   Mouse wheel, 1..6 .. Select hotbar slot
+ *   Mouse wheel, 1..9 .. Select hotbar slot
+ *   K .................. Next performer skin (sandbox)
  *   G .................. Drop one of the selected module on the floor
  *   Space .............. Start / pause / resume the run of the board you stand at
  *   R .................. Stop and reset the attempt (layout is kept)
@@ -50,6 +51,17 @@ public:
 	UPROPERTY(Transient) TObjectPtr<UInputAction> ResetRun;      // Bool (R)
 	UPROPERTY(Transient) TObjectPtr<UInputAction> ToggleHelp;    // Bool (H)
 	UPROPERTY(Transient) TObjectPtr<UInputAction> PauseMenu;     // Bool (Esc / P), triggers while paused
+	UPROPERTY(Transient) TObjectPtr<UInputAction> CycleSkin;     // Bool (K), sandbox: next performer skin
+
+	// ---- Menus (AHueboxPlayerController); all trigger while paused ------------------------------------------
+	UPROPERTY(Transient) TObjectPtr<UInputAction> MenuUp;        // Bool (W, Up)
+	UPROPERTY(Transient) TObjectPtr<UInputAction> MenuDown;      // Bool (S, Down)
+	UPROPERTY(Transient) TObjectPtr<UInputAction> MenuConfirm;   // Bool (Enter, Space)
+	UPROPERTY(Transient) TObjectPtr<UInputAction> MenuClick;     // Bool (LMB): the item under the mouse
+	UPROPERTY(Transient) TObjectPtr<UInputAction> MenuBack;      // Bool (Esc, P)
+
+	/** Menu keys; pushed above the pawn's context while a menu is open, so they consume the pawn's mappings. */
+	UPROPERTY(Transient) TObjectPtr<UInputMappingContext> MenuContext;
 
 	// ---- Instruction mode (AHueBuilderPawn) ----------------------------------------------------------------
 	UPROPERTY(Transient) TObjectPtr<UInputAction> CursorMove;    // Axis2D: W/S/A/D + arrow keys (X = right, Y = up on screen)

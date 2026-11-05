@@ -42,7 +42,8 @@ public:
 	const FHueInteractionTarget& GetTarget() const;
 	EHueDir GetPreviewFacing() const;
 	bool IsHelpVisible() const { return bShowHelp; }
-	bool IsPauseMenuOpen() const { return bPauseMenuOpen; }
+	/** The controller's pause menu is open. */
+	bool IsPauseMenuOpen() const;
 
 	/** Short message on the HUD (fell out, nothing to drop, ...). Forwarded to the exhibit feedback log by the tool. */
 	void ShowMessage(EHueFeedbackKind Kind, const FString& Message);
@@ -71,6 +72,8 @@ protected:
 	void HandleReset();
 	void HandleToggleHelp();
 	void HandlePauseMenu();
+	/** K: every rig of the level wears the next available skin. */
+	void HandleCycleSkin();
 
 	void EnsureInputConfig();
 	void AddMappingContext();
@@ -96,7 +99,6 @@ protected:
 	TObjectPtr<UHueInputConfig> InputConfig;
 
 	bool bShowHelp = true;
-	bool bPauseMenuOpen = false;
 	bool bMappingAdded = false;
 
 private:

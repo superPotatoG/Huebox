@@ -58,7 +58,8 @@ protected:
 	void DrawTargetPanel(const UHueBuildToolComponent* Tool, EHudContext Context);
 	void DrawFeedback(AExhibitManager* Manager);
 	void DrawHelp(EHudContext Context);
-	void DrawPauseOverlay();
+	/** The controller's open menu (title screen or pause), on top of everything; records the entry rectangles. */
+	void DrawMenu();
 
 	// Sandbox -----------------------------------------------------------------------------------------------
 	void DrawCrosshairAndPrompt(const UHueBuildToolComponent* Tool, APawn* Pawn);
@@ -95,4 +96,13 @@ protected:
 
 	/** The run is Complete / Ended this frame: in the Watch view Space replays, so hint bar and help say so. */
 	bool bRunFinished = false;
+
+	/** Screen rectangles (min, max) of the menu entries drawn last frame, by entry index. */
+	TArray<FBox2D> MenuItemRects;
+	/** Mouse position of the last frame: only a moving mouse takes the selection over from the keys. */
+	FVector2D LastMenuMouse = FVector2D(-1.0, -1.0);
+
+public:
+	/** Index of the menu entry drawn at ScreenPosition last frame, or INDEX_NONE. */
+	int32 GetMenuItemAt(const FVector2D& ScreenPosition) const;
 };

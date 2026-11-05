@@ -131,9 +131,9 @@ struct FHueBoardLayout
 /**
  * Builds the Level 1 "prototype table" at BeginPlay from data: four exercise boards (GDD 4: route a signal,
  * change motion, synthesize a stop; plus the colour key: open a blue brick, mix a Y and time it to break the yellow board on stage), their rigs, their module supply (Instruction mode: the board's tray; Sandbox mode:
- * floor pickups), titles, and - if the level has none - a ground slab and lights. A fifth board east of them is the
- * Level 2 sample (8 x 8, source base with four outputs) until Level 2 gets its own map. Layouts are plain USTRUCT
- * data so designers can edit them in the details panel.
+ * floor pickups), titles, and - if the level has none - a ground slab and lights. Level 2 and the sandbox are their
+ * own maps with their own builders (AHueExhibitBuilder, AHueSandboxBuilder), which only differ in their layouts.
+ * Layouts are plain USTRUCT data so designers can edit them in the details panel.
  */
 UCLASS()
 class HUEBOX_API AHueTutorialBuilder : public AActor
@@ -143,8 +143,12 @@ class HUEBOX_API AHueTutorialBuilder : public AActor
 public:
 	AHueTutorialBuilder();
 
-	/** The tutorial exercises (the three of the GDD, then the colour key), then the Level 2 sample. */
+	/** The tutorial exercises: the three of the GDD, then the colour key. */
 	static void MakeDefaultTutorialLayouts(TArray<FHueBoardLayout>& OutLayouts);
+	/** Level 2, the exhibition box (8 x 8, a source base with four outputs). */
+	static void MakeLevel2Layouts(TArray<FHueBoardLayout>& OutLayouts);
+	/** The sandbox: one large board without objectives, a removable source and receiver on it. */
+	static void MakeSandboxLayouts(TArray<FHueBoardLayout>& OutLayouts);
 
 	/** Spawns one block from a spec on Board (handles kind -> class, colour, delay, receiver faces, rig link). */
 	static APulseBlock* SpawnBlockFromSpec(AHueBoard* Board, const FHueBlockSpec& Spec, AReactiveRig* Rig);
@@ -161,6 +165,9 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/** The layouts this builder uses when none are set (subclasses: their level). */
+	virtual void MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const;
 
 	void BuildAll();
 	AHueBoard* BuildBoard(const FHueBoardLayout& Layout, int32 Index);
@@ -181,4 +188,30 @@ protected:
 
 	/** Board -> layout index (weak keys: boards may be destroyed independently). */
 	TMap<TWeakObjectPtr<const AHueBoard>, int32> BoardToLayout;
+};
+
+/** Builds Level 2, the exhibition box (map Lvl_Exhibit). */
+UCLASS()
+class HUEBOX_API AHueExhibitBuilder : public AHueTutorialBuilder
+{
+	GENERATED_BODY()
+
+public:
+	AHueExhibitBuilder();
+
+protected:
+	virtual void MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const override;
+};
+
+/** Builds the sandbox board (map Lvl_Sandbox, played in Sandbox mode). */
+UCLASS()
+class HUEBOX_API AHueSandboxBuilder : public AHueTutorialBuilder
+{
+	GENERATED_BODY()
+
+public:
+	AHueSandboxBuilder();
+
+protected:
+	virtual void MakeDefaultLayouts(TArray<FHueBoardLayout>& OutLayouts) const override;
 };

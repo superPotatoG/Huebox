@@ -78,7 +78,8 @@ public:
 	void SecondaryAction();
 	/** Q / E: rotate the targeted removable block, otherwise the placement preview. */
 	void RotateTargetOrPreview(int32 Steps);
-	/** Z / X: +/- Steps * 0.25 s on the targeted delay block. */
+	/** Z / X: +/- Steps * 0.25 s on the targeted delay block; on a removable source or brick (sandbox) the next /
+	 *  previous colour instead. */
 	void AdjustTargetDelay(int32 Steps);
 	/** Wheel / 1..6 on the active inventory. */
 	void CycleSelection(int32 Delta);
@@ -116,6 +117,8 @@ protected:
 	void UpdatePreview();
 	void ClearHighlight();
 	void SelectIfNothingSelected(EHueModuleType Type);
+	/** Source / brick colour Steps along the colour ring (all seven colours). */
+	void CycleTargetColor(APulseBlock& Block, int32 Steps);
 	void SelectNextFilledSlotIfEmpty();
 
 	/** Runtime components created on the owner in BeginPlay (absolute transforms, no collision). */

@@ -2,6 +2,7 @@
 
 #include "Algo/StableSort.h"
 #include "Components/SceneComponent.h"
+#include "Containers/Ticker.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -20,6 +21,7 @@
 #include "Game/HueTutorialBuilder.h"
 #include "Grid/HueBoard.h"
 #include "Player/HueBuilderPawn.h"
+#include "Player/HueboxPlayerController.h"
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
@@ -187,10 +189,24 @@ void AExhibitManager::PrepareVisualCheck()
 
 void AExhibitManager::TakeVisualCheckShot()
 {
-	// The shot is written at the end of the next rendered frame; quit a moment later.
+	// -HueShotMenu: the pause menu over the scene (it pauses the world).
+	if (FParse::Param(FCommandLine::Get(), TEXT("HueShotMenu")))
+	{
+		if (AHueboxPlayerController* PC = Cast<AHueboxPlayerController>(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr))
+		{
+			PC->TogglePauseMenu();
+		}
+	}
+
+	// The shot is written at the end of the next rendered frame; quit a moment later. Core ticker, not a world timer:
+	// those stop while the world is paused. The lambda captures nothing, so it can outlive this actor.
 	FScreenshotRequest::RequestScreenshot(ShotPath, /*bShowUI*/ true, /*bAddFilenameSuffix*/ false);
 	UE_LOG(LogHuebox, Display, TEXT("HueShot: requested %s"), *ShotPath);
-	GetWorldTimerManager().SetTimer(ShotTimer, FTimerDelegate::CreateWeakLambda(this, []() { FPlatformMisc::RequestExit(false); }), 1.5f, false);
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([](float)
+	{
+		FPlatformMisc::RequestExit(false);
+		return false;
+	}), 1.5f);
 }
 
 void AExhibitManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -213,7 +229,8 @@ void AExhibitManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Sim.Reset();
 	SelfTestBoard.Reset();
 	bSelfTestActive = false;
-	SelfTestBoardIndex = INDEX_NONE;
+	SelfTestCases.Empty();
+	SelfTestCaseIndex = INDEX_NONE;
 	ActiveBoard = nullptr;
 	Boards.Empty();
 	RecentFeedback.Empty();
@@ -661,6 +678,14 @@ void AExhibitManager::HandleRunTimeout()
 		Rig->FreezeMotion();
 	}
 
+	// A board without objectives (the sandbox) has nothing to fail: its run simply ends.
+	if (IsValid(Board) && Board->GetObjectives().Num() == 0)
+	{
+		EndReason = FString::Printf(TEXT("Free run over (%s s)"), *HueExhibitPrivate::FormatSeconds(LimitSeconds));
+		PushFeedback(EHueFeedbackKind::Info, FString::Printf(TEXT("%s - press R to reset, Space to run again."), *EndReason), Board);
+		return;
+	}
+
 	EndReason = FString::Printf(TEXT("Time limit (%s s) reached"), *HueExhibitPrivate::FormatSeconds(LimitSeconds));
 	PushFeedback(EHueFeedbackKind::Error,
 		FString::Printf(TEXT("%s - %s stopped at %d%% of the track. Press R to reset."),
@@ -766,13 +791,62 @@ void AExhibitManager::BeginSelfTest()
 	PruneBoards();
 
 	bSelfTestActive = true;
-	SelfTestBoardIndex = INDEX_NONE;
+	SelfTestCaseIndex = INDEX_NONE;
 	SelfTestBoard.Reset();
 	SelfTestWait = 0.f;
 	SelfTestPassed = 0;
 	SelfTestFailed = 0;
+	SweepWorking.Reset();
+	SweepTried.Reset();
 
-	UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: validating %d board(s) with their baseline solutions"), Boards.Num());
+	// -HueSelfTestSweep[=N]: N delay steps either side of every solution delay (bare switch: 2).
+	int32 SweepSteps = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("HueSelfTestSweep="), SweepSteps))
+	{
+		SweepSteps = FMath::Clamp(SweepSteps, 0, 24);
+	}
+	else if (FParse::Param(FCommandLine::Get(), TEXT("HueSelfTestSweep")))
+	{
+		SweepSteps = 2;
+	}
+
+	// Every baseline first (the pass / fail verdict), then the sweep runs.
+	SelfTestCases.Reset();
+	for (int32 Index = 0; Index < Boards.Num(); ++Index)
+	{
+		FSelfTestCase& Baseline = SelfTestCases.AddDefaulted_GetRef();
+		Baseline.BoardIndex = Index;
+	}
+	const AHueTutorialBuilder* Builder = AHueTutorialBuilder::FindInWorld(this);
+	for (int32 Index = 0; SweepSteps > 0 && Index < Boards.Num(); ++Index)
+	{
+		const FHueBoardLayout* Layout = (Builder && IsValid(Boards[Index])) ? Builder->FindLayoutForBoard(Boards[Index]) : nullptr;
+		if (!Layout)
+		{
+			continue;
+		}
+		for (const FHueBlockSpec& Spec : Layout->SolutionBlocks)
+		{
+			if (Spec.Kind != EHueBlockKind::Delay)
+			{
+				continue;
+			}
+			for (int32 Step = -SweepSteps; Step <= SweepSteps; ++Step)
+			{
+				const float Seconds = Spec.DelaySeconds + Step * AHueDelayBlock::DelayStep;
+				if (Step != 0 && Seconds >= AHueDelayBlock::MinDelay - UE_KINDA_SMALL_NUMBER && Seconds <= AHueDelayBlock::MaxDelay + UE_KINDA_SMALL_NUMBER)
+				{
+					FSelfTestCase& Sweep = SelfTestCases.AddDefaulted_GetRef();
+					Sweep.BoardIndex = Index;
+					Sweep.DelayCell = Spec.Cell;
+					Sweep.DelaySeconds = Seconds;
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: validating %d board(s) with their baseline solutions (%d sweep run(s), %d step(s) either side)"),
+		Boards.Num(), SelfTestCases.Num() - Boards.Num(), SweepSteps);
 	if (Boards.Num() == 0)
 	{
 		UE_LOG(LogHuebox, Warning, TEXT("HueSelfTest: no boards registered - nothing to validate"));
@@ -781,11 +855,19 @@ void AExhibitManager::BeginSelfTest()
 	StartNextSelfTestBoard();
 }
 
+FString AExhibitManager::SweepKey(const FSelfTestCase& Case) const
+{
+	const AHueBoard* Board = Boards.IsValidIndex(Case.BoardIndex) ? Boards[Case.BoardIndex].Get() : nullptr;
+	return FString::Printf(TEXT("%s D(%d,%d)"), IsValid(Board) ? *Board->GetBoardName() : TEXT("<missing board>"),
+		Case.DelayCell.X, Case.DelayCell.Y);
+}
+
 void AExhibitManager::StartNextSelfTestBoard()
 {
-	for (++SelfTestBoardIndex; Boards.IsValidIndex(SelfTestBoardIndex); ++SelfTestBoardIndex)
+	for (++SelfTestCaseIndex; SelfTestCases.IsValidIndex(SelfTestCaseIndex); ++SelfTestCaseIndex)
 	{
-		AHueBoard* Board = Boards[SelfTestBoardIndex];
+		const FSelfTestCase& Case = SelfTestCases[SelfTestCaseIndex];
+		AHueBoard* Board = Boards.IsValidIndex(Case.BoardIndex) ? Boards[Case.BoardIndex].Get() : nullptr;
 		SelfTestBoard = Board;
 		SelfTestWait = 0.f;
 
@@ -806,6 +888,17 @@ void AExhibitManager::StartNextSelfTestBoard()
 		{
 			UE_LOG(LogHuebox, Warning, TEXT("HueSelfTest: no layout known for %s - running its current layout"),
 				*Board->GetBoardName());
+		}
+
+		if (Case.IsSweep())
+		{
+			AHueDelayBlock* Delay = Cast<AHueDelayBlock>(Board->GetBlockAt(Case.DelayCell));
+			if (!Delay)
+			{
+				FinishSelfTestBoard(false, TEXT("no solution delay on that cell"));
+				continue;
+			}
+			Delay->SetDelaySeconds(Case.DelaySeconds);
 		}
 
 		if (StartRun(Board))
@@ -877,6 +970,24 @@ void AExhibitManager::FinishSelfTestBoard(bool bPassed, const FString& Reason)
 	const float MaxFraction = IsValid(Rig) ? Rig->GetAttemptMaxFraction() : 0.f;
 	const double RunTime = GetRunTimeSeconds();
 
+	// A sweep run only records where the timing window ends: one line, never a failure.
+	if (SelfTestCases.IsValidIndex(SelfTestCaseIndex) && SelfTestCases[SelfTestCaseIndex].IsSweep())
+	{
+		const FSelfTestCase& Case = SelfTestCases[SelfTestCaseIndex];
+		const FString Key = SweepKey(Case);
+		const FString Value = FString::Printf(TEXT("%.2f"), Case.DelaySeconds);
+		SweepTried.FindOrAdd(Key).Add(Value);
+		if (bPassed)
+		{
+			SweepWorking.FindOrAdd(Key).Add(Value);
+		}
+		UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: SWEEP %s=%ss %s t=%.2f fraction=%.3f max=%.3f%s%s"), *Key, *Value,
+			bPassed ? TEXT("PASS") : TEXT("FAIL"), RunTime, Fraction, MaxFraction,
+			bPassed ? TEXT("") : TEXT(" - "), bPassed ? TEXT("") : *Reason);
+		ResetAttempt();
+		return;
+	}
+
 	UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: %s %s t=%.2f fraction=%.3f max=%.3f"),
 		bPassed ? TEXT("PASS") : TEXT("FAIL"), *Name, RunTime, Fraction, MaxFraction);
 
@@ -930,8 +1041,17 @@ void AExhibitManager::FinishSelfTestBoard(bool bPassed, const FString& Reason)
 void AExhibitManager::FinishSelfTest()
 {
 	bSelfTestActive = false;
-	SelfTestBoardIndex = INDEX_NONE;
+	SelfTestCaseIndex = INDEX_NONE;
 	SelfTestBoard.Reset();
+
+	// The timing windows: for each swept delay, the settings that still complete (the baseline always does when the
+	// board passed).
+	for (const TPair<FString, TArray<FString>>& Tried : SweepTried)
+	{
+		const TArray<FString>* Working = SweepWorking.Find(Tried.Key);
+		UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: WINDOW %s tried [%s] completes at [%s] (plus the baseline)"), *Tried.Key,
+			*FString::Join(Tried.Value, TEXT(" ")), Working ? *FString::Join(*Working, TEXT(" ")) : TEXT(""));
+	}
 
 	UE_LOG(LogHuebox, Display, TEXT("HueSelfTest: SUMMARY passed=%d failed=%d"), SelfTestPassed, SelfTestFailed);
 

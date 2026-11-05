@@ -62,10 +62,11 @@ namespace HueInputPrivate
 		}
 	}
 
-	/** Number keys share one Axis1D action; the scalar turns the key's 1.0 into the slot number 1..6. */
+	/** Number keys share one Axis1D action; the scalar turns the key's 1.0 into the slot number 1..9. */
 	static void MapHotbarSlots(UInputMappingContext* Context, const UInputAction* HotbarSlot)
 	{
-		const FKey SlotKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six };
+		const FKey SlotKeys[] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six,
+			EKeys::Seven, EKeys::Eight, EKeys::Nine };
 		double SlotNumber = 1.0;
 		for (const FKey& SlotKey : SlotKeys)
 		{
@@ -116,8 +117,44 @@ void UHueInputConfig::BuildDefaults()
 	NextBoard    = HueInputPrivate::MakeAction(this, TEXT("IA_NextBoard"),    EInputActionValueType::Boolean);
 	PrevBoard    = HueInputPrivate::MakeAction(this, TEXT("IA_PrevBoard"),    EInputActionValueType::Boolean);
 
-	// The pause key must still fire while the game is paused, otherwise the menu could never be closed.
+	// Sandbox: next performer skin.
+	CycleSkin    = HueInputPrivate::MakeAction(this, TEXT("IA_CycleSkin"),    EInputActionValueType::Boolean);
+
+	// Menus (owned by the player controller).
+	MenuUp       = HueInputPrivate::MakeAction(this, TEXT("IA_MenuUp"),       EInputActionValueType::Boolean);
+	MenuDown     = HueInputPrivate::MakeAction(this, TEXT("IA_MenuDown"),     EInputActionValueType::Boolean);
+	MenuConfirm  = HueInputPrivate::MakeAction(this, TEXT("IA_MenuConfirm"),  EInputActionValueType::Boolean);
+	MenuClick    = HueInputPrivate::MakeAction(this, TEXT("IA_MenuClick"),    EInputActionValueType::Boolean);
+	MenuBack     = HueInputPrivate::MakeAction(this, TEXT("IA_MenuBack"),     EInputActionValueType::Boolean);
+
+	// The pause key must still fire while the game is paused, otherwise the menu could never be closed; so must every
+	// menu key (the pause menu is open while the world is paused).
 	PauseMenu->bTriggerWhenPaused = true;
+	for (UInputAction* MenuAction : { MenuUp.Get(), MenuDown.Get(), MenuConfirm.Get(), MenuClick.Get(), MenuBack.Get() })
+	{
+		MenuAction->bTriggerWhenPaused = true;
+	}
+
+	// ---- Menu (pushed above the pawn's context while a menu is open; its keys consume the pawn's) ---------------
+	UInputMappingContext* Menu = NewObject<UInputMappingContext>(this, TEXT("IMC_HueMenu"));
+	for (const FKey& Key : { EKeys::W, EKeys::Up })
+	{
+		HueInputPrivate::Map(Menu, MenuUp, Key);
+	}
+	for (const FKey& Key : { EKeys::S, EKeys::Down })
+	{
+		HueInputPrivate::Map(Menu, MenuDown, Key);
+	}
+	for (const FKey& Key : { EKeys::Enter, EKeys::SpaceBar })
+	{
+		HueInputPrivate::Map(Menu, MenuConfirm, Key);
+	}
+	HueInputPrivate::Map(Menu, MenuClick, EKeys::LeftMouseButton);
+	for (const FKey& Key : { EKeys::Escape, EKeys::P })
+	{
+		HueInputPrivate::Map(Menu, MenuBack, Key);
+	}
+	MenuContext = Menu;
 
 	// ---- Build view (top-down cursor) -------------------------------------------------------------------------
 	UInputMappingContext* Build = NewObject<UInputMappingContext>(this, TEXT("IMC_HueBuild"));
@@ -183,6 +220,7 @@ void UHueInputConfig::BuildDefaults()
 	HueInputPrivate::Map(Context, ToggleHelp, EKeys::H);
 	HueInputPrivate::Map(Context, PauseMenu, EKeys::Escape);
 	HueInputPrivate::Map(Context, PauseMenu, EKeys::P);
+	HueInputPrivate::Map(Context, CycleSkin, EKeys::K);
 
 	MappingContext = Context;
 

@@ -18,6 +18,8 @@ public class Huebox : ModuleRules
 
 		// HUD only: GWhiteTexture for the additive light diagram (canvas triangles with a blend mode).
 		PrivateDependencyModuleNames.Add("RenderCore");
+		// SViewport: the player controller hands the game viewport keyboard focus.
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 
 		// Sub-folders are include roots, e.g. #include "Core/HueTypes.h".
 		PublicIncludePaths.Add(ModuleDirectory);

@@ -76,8 +76,13 @@ public:
 
 	/** Applies the cursor / input mode for InPawn (called on BeginPlay and on every possession). */
 	void ApplyInputModeForPawn(const APawn* InPawn);
+	/** The open menu's mode if a menu is open, the pawn's otherwise. */
+	void ApplyCurrentInputMode();
 
 protected:
+	/** Shows the OS cursor and gives the game viewport keyboard focus (build view and menus). */
+	void ApplyCursorInputMode();
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnPossess(APawn* InPawn) override;

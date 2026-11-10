@@ -1,7 +1,10 @@
 #include "Player/HueboxPlayerController.h"
 
 #include "Core/HueTypes.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
+#include "TimerManager.h"
+#include "Widgets/SViewport.h"
 #include "Engine/World.h"
 #include "GameFramework/GameModeBase.h"
 #include "EnhancedInputComponent.h"
@@ -33,8 +36,47 @@ void AHueboxPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// The pawn is usually possessed before BeginPlay (OnPossess already applied the mode); harmless to repeat.
-	ApplyInputModeForPawn(GetPawn());
+	// HandleStartingNewPlayer (the title screen opens its menu there) runs before BeginPlay, so this must respect an
+	// open menu: applying the pawn mode here hid the title screen's cursor (no pawn = first-person mode).
+	ApplyCurrentInputMode();
+	// Again next frame: Play-In-Editor sets focus / mouse capture itself once the world has started.
+	GetWorldTimerManager().SetTimerForNextTick(this, &AHueboxPlayerController::ApplyCurrentInputMode);
+}
+
+void AHueboxPlayerController::ApplyCurrentInputMode()
+{
+	if (IsMenuOpen())
+	{
+		ApplyCursorInputMode();
+	}
+	else
+	{
+		ApplyInputModeForPawn(GetPawn());
+	}
+}
+
+void AHueboxPlayerController::ApplyCursorInputMode()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+	// Clicks are captured only while held, so LMB / RMB still reach the input actions and the cursor never vanishes
+	// or gets trapped in the window.
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	// Game-and-UI only moves keyboard focus when given a widget. Without one the keys kept going wherever focus was
+	// (the editor, or the previous level's menu) until the player clicked into the game.
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (LocalPlayer && LocalPlayer->ViewportClient)
+	{
+		InputMode.SetWidgetToFocus(LocalPlayer->ViewportClient->GetGameViewportWidget());
+	}
+	SetInputMode(InputMode);
+	bShowMouseCursor = true;
+	UE_LOG(LogHuebox, Verbose, TEXT("%s: cursor input mode (menu %d, viewport focus %d)"), *GetName(),
+		static_cast<int32>(Menu), LocalPlayer && LocalPlayer->ViewportClient && LocalPlayer->ViewportClient->GetGameViewportWidget().IsValid() ? 1 : 0);
 }
 
 void AHueboxPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -63,13 +105,8 @@ void AHueboxPlayerController::ApplyInputModeForPawn(const APawn* InPawn)
 
 	if (InPawn && InPawn->IsA<AHueBuilderPawn>())
 	{
-		// Instruction / top-down: the OS cursor hovers cells; clicks are captured only while held, so LMB / RMB still
-		// reach the input actions and the cursor never vanishes or gets trapped in the window.
-		FInputModeGameAndUI InputMode;
-		InputMode.SetHideCursorDuringCapture(false);
-		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		SetInputMode(InputMode);
-		bShowMouseCursor = true;
+		// Instruction / top-down: the OS cursor hovers cells.
+		ApplyCursorInputMode();
 	}
 	else
 	{
@@ -253,11 +290,7 @@ void AHueboxPlayerController::ShowMenu(EHueMenu NewMenu)
 	SetMenuContextActive(true);
 
 	// The menu is clicked with the OS cursor, also over the first-person view (which hides it otherwise).
-	FInputModeGameAndUI InputMode;
-	InputMode.SetHideCursorDuringCapture(false);
-	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-	SetInputMode(InputMode);
-	bShowMouseCursor = true;
+	ApplyCursorInputMode();
 
 	if (NewMenu == EHueMenu::Pause && !UGameplayStatics::SetGamePaused(this, true))
 	{

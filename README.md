@@ -12,8 +12,8 @@ on her way.
 1. Install UE 5.8 and Visual Studio 2026 (Game development with C++).
 2. Right-click `Huebox.uproject` → *Generate Visual Studio project files*, or just open the `.uproject` and let it build.
 3. Maps (recreate with `Scripts/create_tutorial_map.py` and `Scripts/create_maps.py` if needed):
-   - `/Game/Huebox/Maps/Lvl_MainMenu` — title screen; the packaged game starts here
-   - `/Game/Huebox/Maps/Lvl_Tutorial` — Level 1, four exercises (the editor's startup map)
+   - `/Game/Huebox/Maps/Lvl_MainMenu` — title screen; the packaged game and the editor start here
+   - `/Game/Huebox/Maps/Lvl_Tutorial` — Level 1, four exercises
    - `/Game/Huebox/Maps/Lvl_Exhibit` — Level 2, the exhibition box
    - `/Game/Huebox/Maps/Lvl_Sandbox` — free building in first person
 

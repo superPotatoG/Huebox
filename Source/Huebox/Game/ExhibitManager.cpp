@@ -163,6 +163,15 @@ void AExhibitManager::PrepareVisualCheck()
 		PC->SetControlRotation(FRotator(-14.f, -90.f, 0.f));
 	}
 
+	// -HueShotInstall: the build view with the baseline solution placed (no run).
+	if (RunSeconds < 0.f && IsValid(Board) && FParse::Param(FCommandLine::Get(), TEXT("HueShotInstall")))
+	{
+		const AHueTutorialBuilder* Builder = AHueTutorialBuilder::FindInWorld(this);
+		if (const FHueBoardLayout* Layout = Builder ? Builder->FindLayoutForBoard(Board) : nullptr)
+		{
+			AHueTutorialBuilder::InstallSolution(Board, *Layout);
+		}
+	}
 	if (RunSeconds >= 0.f && IsValid(Board))
 	{
 		const AHueTutorialBuilder* Builder = AHueTutorialBuilder::FindInWorld(this);

@@ -22,6 +22,8 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
+	/** The lamp's window shows the colour it sends. */
+	virtual FLinearColor GetArtGlowColor() const override;
 
 	EHueColor GetEmitColor() const { return EmitColor; }
 	void SetEmitColor(EHueColor InColor);
@@ -69,6 +71,8 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
+	/** The window's panes show the colour she holds. */
+	virtual FLinearColor GetArtGlowColor() const override;
 
 	void SetAcceptFaces(const TArray<EHueDir>& Faces);
 	const TArray<EHueDir>& GetAcceptFaces() const { return AcceptFaces; }
@@ -135,7 +139,7 @@ public:
  * Brick: a lock on the grid that only its own colour opens (the grid twin of the stage board). A pulse of BrickColor
  * hitting it through any face is used up breaking it; from the end of that logical instant the cell is open and later
  * pulses pass straight through, unchanged. Any other colour is blocked while it stands. Reset restores the brick.
- * Fixed. Labelled "BRICK <letter>" so it is not mistaken for a source of that colour (art comes later).
+ * Fixed. Shown as a glazed brick with an ice-crack pattern (a source is a round lamp), its letter in the middle.
  */
 UCLASS()
 class HUEBOX_API AHueBrickBlock : public APulseBlock
@@ -151,6 +155,8 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
+	/** The glazed face glows in the colour that opens it. */
+	virtual FLinearColor GetArtGlowColor() const override;
 
 	EHueColor GetBrickColor() const { return BrickColor; }
 	void SetBrickColor(EHueColor InColor);

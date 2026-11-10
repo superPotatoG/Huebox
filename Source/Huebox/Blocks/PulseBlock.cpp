@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "ProceduralMeshComponent.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -61,6 +62,12 @@ namespace HueBlockPrivate
 	const FVector InputMarkerScale(0.14f, 0.14f, 0.02f);	// square
 	const FVector OutputMarkerScale(0.08f, 0.16f, 0.16f);	// cone, see RebuildPortMarkers: X = thickness, Y = width, Z = length
 	const FVector BothMarkerScale(0.16f, 0.06f, 0.02f);		// bar, X = length along the face normal
+
+	/** Tile pictures: lifted just off the top face; the hide and ink as drawn (unlit). */
+	constexpr float ArtLift = 0.15f;
+	const FLinearColor ArtLeatherLight(0.95f, 0.95f, 0.95f);
+	const FLinearColor TileWood(0.50f, 0.37f, 0.22f);
+	const FLinearColor LampGlow(1.25f, 1.05f, 0.72f);
 
 	/**
 	 * Weak cache + LoadObject fallback for shared engine assets used outside constructors. A weak pointer never
@@ -267,6 +274,75 @@ void APulseBlock::RefreshVisuals()
 	}
 	SetBodyColor(Body);
 	ApplyLabel();
+	RefreshArtGlow();
+}
+
+// ---- Tile picture -----------------------------------------------------------------------------------------
+
+FLinearColor APulseBlock::TileWoodColor()
+{
+	return HueBlockPrivate::TileWood;
+}
+
+FLinearColor APulseBlock::LampGlowColor()
+{
+	return HueBlockPrivate::LampGlow;
+}
+
+FLinearColor APulseBlock::GetArtGlowColor() const
+{
+	return HueBlockPrivate::LampGlow;
+}
+
+void APulseBlock::RefreshArtGlow()
+{
+	if (ArtGlowMID)
+	{
+		ArtGlowMID->SetVectorParameterValue(HueBlockPrivate::ColorParam(), GetArtGlowColor());
+	}
+}
+
+void APulseBlock::SetArtVisible(bool bVisible)
+{
+	if (ArtMesh)
+	{
+		ArtMesh->SetVisibility(bVisible);
+	}
+}
+
+void APulseBlock::BuildTileArt()
+{
+	const FHuePuppetDef* Def = HuePuppets::GetTileArt(TileArt);
+	const UWorld* World = GetWorld();
+	if (!Def || ArtMesh || !Pivot || !World || !World->IsGameWorld())
+	{
+		return;
+	}
+	UMaterialInterface* Material = HuePuppets::GetPuppetMaterial();
+	if (!Material)
+	{
+		return;
+	}
+	ArtLeatherMID = UMaterialInstanceDynamic::Create(Material, this);
+	ArtGlowMID = UMaterialInstanceDynamic::Create(Material, this);
+	ArtLeatherMID->SetVectorParameterValue(HueBlockPrivate::ColorParam(), HueBlockPrivate::ArtLeatherLight);
+
+	// Runtime component owned by this actor (the UPROPERTY keeps it). Generated pieces are drawn in their XZ plane
+	// with the layers along +Y: roll -90 lays it on the tile, layers upwards, the picture's "up" towards the top
+	// of the build view (-Y). Scaled to the tile (pictures are drawn for their Height across).
+	ArtMesh = NewObject<UProceduralMeshComponent>(this, TEXT("TileArt"), RF_Transient);
+	ArtMesh->SetupAttachment(Pivot);
+	const float TileWidth = static_cast<float>(FMath::Min(BodyScale.X, BodyScale.Y)) * 100.f;
+	const float Scale = TileWidth / FMath::Max(Def->Height, 1.f);
+	ArtMesh->SetRelativeLocationAndRotation(FVector(0.f, 0.f, BodyScale.Z * 100.f + HueBlockPrivate::ArtLift), FRotator(0.f, 0.f, -90.f));
+	ArtMesh->SetRelativeScale3D(FVector(Scale, 1.f, Scale));
+	ArtMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ArtMesh->SetGenerateOverlapEvents(false);
+	ArtMesh->SetCanEverAffectNavigation(false);
+	ArtMesh->SetCastShadow(false);
+	ArtMesh->RegisterComponent();
+	HuePuppets::CreatePieceSections(ArtMesh, *Def, 0, ArtLeatherMID, ArtGlowMID);
+	RefreshArtGlow();
 }
 
 // ---- IHueInteractable -------------------------------------------------------------------------------------
@@ -345,6 +421,7 @@ void APulseBlock::BeginPlay()
 		}
 	}
 
+	BuildTileArt();
 	RefreshVisuals();
 	RebuildPortMarkers();
 }

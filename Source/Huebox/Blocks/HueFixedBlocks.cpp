@@ -30,9 +30,15 @@ AHueSourceBlock::AHueSourceBlock()
 	BlockDisplayName = TEXT("Source");
 	BodyScale = HueFixedBlocksPrivate::FixedTileScale;
 	ApplyBodyLayout();
-	// Tile in the emitted colour with dark ink.
-	BaseColor = HueColor::ToLinear(EmitColor);
-	SetLabelText(FString::Printf(TEXT("SRC %s"), HueColor::Label(EmitColor)), TileLabelColor());
+	// A lacquered lamp on a wooden tile; its window glows in the emitted colour, the letter in the middle.
+	TileArt = EHueTileArt::Source;
+	BaseColor = TileWoodColor();
+	SetLabelText(HueColor::Label(EmitColor), TileLabelColor());
+}
+
+FLinearColor AHueSourceBlock::GetArtGlowColor() const
+{
+	return HueColor::ToLinear(EmitColor) * 1.6f;
 }
 
 void AHueSourceBlock::GetPorts(TArray<FHuePort>& OutPorts) const
@@ -109,9 +115,9 @@ FString AHueSourceBlock::GetStateText() const
 
 void AHueSourceBlock::RefreshVisuals()
 {
-	BaseColor = HueColor::ToLinear(EmitColor);
-	// A base reads "BASE" (its output arrows on every face show how many); short enough for the tile font.
-	LabelString = FString::Printf(TEXT("%s %s"), IsMultiOutput() ? TEXT("BASE") : TEXT("SRC"), HueColor::Label(EmitColor));
+	BaseColor = TileWoodColor();
+	// Just the colour letter: the output arrows on its faces show how many it fires (a base has one on each face).
+	LabelString = HueColor::Label(EmitColor);
 	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
@@ -146,9 +152,15 @@ AHueReceiverBlock::AHueReceiverBlock()
 	AcceptFaces = { EHueDir::East, EHueDir::North, EHueDir::West, EHueDir::South };
 	BodyScale = HueFixedBlocksPrivate::FixedTileScale;
 	ApplyBodyLayout();
-	// Tile in the currently held colour (N = white) with dark ink.
-	BaseColor = HueColor::ToLinear(CurrentColor);
-	SetLabelText(FString::Printf(TEXT("RCV %s"), HueColor::Label(CurrentColor)), TileLabelColor());
+	// A round carved window; its panes glow in the colour it holds (N = white), the letter in the middle.
+	TileArt = EHueTileArt::Receiver;
+	BaseColor = TileWoodColor();
+	SetLabelText(HueColor::Label(CurrentColor), TileLabelColor());
+}
+
+FLinearColor AHueReceiverBlock::GetArtGlowColor() const
+{
+	return HueColor::ToLinear(CurrentColor) * 1.4f;
 }
 
 EPulseResponse AHueReceiverBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -304,8 +316,8 @@ FString AHueReceiverBlock::GetStateText() const
 
 void AHueReceiverBlock::RefreshVisuals()
 {
-	BaseColor = HueColor::ToLinear(CurrentColor);
-	LabelString = FString::Printf(TEXT("RCV %s"), HueColor::Label(CurrentColor));
+	BaseColor = TileWoodColor();
+	LabelString = HueColor::Label(CurrentColor);
 	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
@@ -351,7 +363,8 @@ AHueBarrierBlock::AHueBarrierBlock()
 	BaseColor = HueFixedBlocksPrivate::BarrierColor;
 	BodyScale = HueFixedBlocksPrivate::BarrierTileScale;
 	ApplyBodyLayout();
-	SetLabelText(FString(), TileLabelColor()); // no label: the dark tile speaks for itself
+	TileArt = EHueTileArt::Barrier;
+	SetLabelText(FString(), TileLabelColor()); // no label: the dark wood speaks for itself
 }
 
 EPulseResponse AHueBarrierBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -383,8 +396,14 @@ AHueBrickBlock::AHueBrickBlock()
 	BlockDisplayName = TEXT("Brick");
 	BodyScale = HueFixedBlocksPrivate::BrickStandingScale;
 	ApplyBodyLayout();
+	TileArt = EHueTileArt::Brick;
 	BaseColor = HueColor::ToLinear(BrickColor);
-	SetLabelText(FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor)), TileLabelColor());
+	SetLabelText(HueColor::Label(BrickColor), TileLabelColor());
+}
+
+FLinearColor AHueBrickBlock::GetArtGlowColor() const
+{
+	return HueColor::ToLinear(BrickColor) * 1.3f;
 }
 
 EPulseResponse AHueBrickBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -472,14 +491,16 @@ void AHueBrickBlock::RefreshVisuals()
 	{
 		BaseColor = FLinearColor(Color.R * HueFixedBlocksPrivate::BrickBrokenDim, Color.G * HueFixedBlocksPrivate::BrickBrokenDim,
 			Color.B * HueFixedBlocksPrivate::BrickBrokenDim, 1.f);
-		LabelString = TEXT("open");
+		LabelString = FString();
 	}
 	else
 	{
 		BaseColor = Color;
-		LabelString = FString::Printf(TEXT("BRICK %s"), HueColor::Label(BrickColor));
+		LabelString = HueColor::Label(BrickColor);
 	}
-	LabelColor = ContrastTextColor(BaseColor);
+	// The glazed face goes with the brick; a thin dark rim stays where it stood.
+	SetArtVisible(!bBroken);
+	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
 

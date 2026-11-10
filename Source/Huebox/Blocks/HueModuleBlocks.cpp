@@ -26,8 +26,9 @@ namespace HueModuleBlocksPrivate
 	}
 }
 
-// Presentation of every module: the base class' flat 80 x 80 x 6 cm tile ("2D white prop") in
-// HueModule::BodyColor with a dark label on the top face (TileLabelColor).
+// Presentation of every module: the base class' flat 80 x 80 x 6 cm tile in pale wood with a carved picture on top
+// (TileArt: channel, taiji, dial, merging channels). Only values stay as text (the delay's seconds); the HUD and the
+// tray name every module.
 
 // =============================================================================================================
 // Turn
@@ -37,8 +38,9 @@ AHueTurnBlock::AHueTurnBlock()
 {
 	ModuleType = EHueModuleType::Turn;
 	BlockDisplayName = TEXT("Turn");
-	BaseColor = HueModule::BodyColor(EHueModuleType::Turn);
-	SetLabelText(TEXT("TURN"), TileLabelColor());
+	TileArt = EHueTileArt::Turn;
+	BaseColor = TileWoodColor();
+	SetLabelText(FString(), TileLabelColor());
 }
 
 bool AHueTurnBlock::TryTurn(EHueDir TravelDir, EHueDir& OutExitDir) const
@@ -110,8 +112,14 @@ AHueColorShiftBlock::AHueColorShiftBlock()
 {
 	ModuleType = EHueModuleType::ColorShift;
 	BlockDisplayName = TEXT("Colour shift");
-	BaseColor = HueModule::BodyColor(EHueModuleType::ColorShift);
-	SetLabelText(TEXT("SHIFT"), TileLabelColor());
+	TileArt = EHueTileArt::Shift;
+	BaseColor = TileWoodColor();
+	SetLabelText(FString(), TileLabelColor());
+}
+
+FLinearColor AHueColorShiftBlock::GetArtGlowColor() const
+{
+	return FLinearColor(1.2f, 1.2f, 1.2f);
 }
 
 EPulseResponse AHueColorShiftBlock::ReceivePulse(FPulseData& Pulse, UPulseSubsystem& Sim)
@@ -168,8 +176,14 @@ AHueDelayBlock::AHueDelayBlock()
 {
 	ModuleType = EHueModuleType::Delay;
 	BlockDisplayName = TEXT("Delay");
-	BaseColor = HueModule::BodyColor(EHueModuleType::Delay);
-	SetLabelText(FString::Printf(TEXT("D %.2fs"), DelaySeconds), TileLabelColor());
+	TileArt = EHueTileArt::Delay;
+	BaseColor = TileWoodColor();
+	SetLabelText(FString::Printf(TEXT("%.2fs"), DelaySeconds), TileLabelColor());
+}
+
+FLinearColor AHueDelayBlock::GetArtGlowColor() const
+{
+	return bHolding ? HueColor::ToLinear(HeldPulse.Color) * 1.6f : LampGlowColor();
 }
 
 void AHueDelayBlock::OnConstruction(const FTransform& Transform)
@@ -284,8 +298,8 @@ void AHueDelayBlock::RefreshVisuals()
 {
 	// TextRender line break is "<br>".
 	LabelString = bHolding
-		? FString::Printf(TEXT("D %.2fs<br>[%s]"), DelaySeconds, HueColor::Label(HeldPulse.Color))
-		: FString::Printf(TEXT("D %.2fs"), DelaySeconds);
+		? FString::Printf(TEXT("%.2fs<br>[%s]"), DelaySeconds, HueColor::Label(HeldPulse.Color))
+		: FString::Printf(TEXT("%.2fs"), DelaySeconds);
 	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
 }
@@ -309,8 +323,9 @@ AHueMixerBlock::AHueMixerBlock()
 {
 	ModuleType = EHueModuleType::Mixer;
 	BlockDisplayName = TEXT("Mixer");
-	BaseColor = HueModule::BodyColor(EHueModuleType::Mixer);
-	SetLabelText(TEXT("MIX"), TileLabelColor());
+	TileArt = EHueTileArt::Mixer;
+	BaseColor = TileWoodColor();
+	SetLabelText(FString(), TileLabelColor());
 }
 
 EHueDir AHueMixerBlock::GetInputFace(int32 Input) const
@@ -563,7 +578,13 @@ FString AHueMixerBlock::GetStateText() const
 
 void AHueMixerBlock::RefreshVisuals()
 {
-	LabelString = bWaiting ? TEXT("MIX...") : TEXT("MIX");
+	// The chamber glows with the waiting colour; the dots say it is waiting for the other input.
+	LabelString = bWaiting ? TEXT("...") : TEXT("");
 	LabelColor = TileLabelColor();
 	Super::RefreshVisuals();
+}
+
+FLinearColor AHueMixerBlock::GetArtGlowColor() const
+{
+	return bWaiting ? HueColor::ToLinear(WaitingColor) * 1.6f : LampGlowColor();
 }

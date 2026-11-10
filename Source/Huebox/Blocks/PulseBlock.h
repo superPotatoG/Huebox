@@ -4,10 +4,12 @@
 #include "GameFramework/Actor.h"
 #include "Core/HueTypes.h"
 #include "Player/HueInteractable.h"
+#include "Rig/HueShadowPuppet.h"
 #include "PulseBlock.generated.h"
 
 class UPulseSubsystem;
 class AHueBoard;
+class UProceduralMeshComponent;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 class UMaterialInstanceDynamic;
@@ -214,6 +216,32 @@ protected:
 	/** Applies BodyScale to the body mesh and the label height (constructors / OnConstruction). */
 	void ApplyBodyLayout();
 
+	// ---- Tile picture: a carved piece lying on the top face (Scripts/puppets/gen_puppets.py) --------------------
+
+	/** Which picture this block shows (subclass constructors). None = plain tile. */
+	EHueTileArt TileArt = EHueTileArt::None;
+
+	/** Light through the picture's openings. Default: warm lamp light; blocks that hold a colour show it. */
+	virtual FLinearColor GetArtGlowColor() const;
+	/** Pushes GetArtGlowColor to the picture (RefreshVisuals calls it). */
+	void RefreshArtGlow();
+	void SetArtVisible(bool bVisible);
+
+	/** Pale wooden tile under the pictures of modules, sources and receivers. */
+	static FLinearColor TileWoodColor();
+	/** The default warm light through a picture's openings. */
+	static FLinearColor LampGlowColor();
+
+	/** Rotates with Facing (attached to Pivot); created in game worlds only. */
+	UPROPERTY(Transient)
+	TObjectPtr<UProceduralMeshComponent> ArtMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> ArtLeatherMID;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> ArtGlowMID;
+
 	/** "Turn (3,2)" - prefix of every feedback line this block raises. */
 	FString DescribeBlock() const;
 
@@ -230,6 +258,7 @@ protected:
 	static FLinearColor TileLabelColor();
 
 private:
+	void BuildTileArt();
 	void EndFlash();
 	void ApplyFacingRotation();
 	/** Pushes LabelString / LabelColor (or the flash cross) to the text component. */

@@ -84,6 +84,79 @@ const FHuePuppetDef* HuePuppets::GetDef(EHuePuppetFigure Figure)
 	}
 }
 
+const FHuePuppetDef* HuePuppets::GetTileArt(EHueTileArt Art)
+{
+	switch (Art)
+	{
+	case EHueTileArt::Turn:     return &HuePuppetShapes::TileTurnPuppet;
+	case EHueTileArt::Shift:    return &HuePuppetShapes::TileShiftPuppet;
+	case EHueTileArt::Delay:    return &HuePuppetShapes::TileDelayPuppet;
+	case EHueTileArt::Mixer:    return &HuePuppetShapes::TileMixerPuppet;
+	case EHueTileArt::Source:   return &HuePuppetShapes::TileSourcePuppet;
+	case EHueTileArt::Receiver: return &HuePuppetShapes::TileReceiverPuppet;
+	case EHueTileArt::Brick:    return &HuePuppetShapes::TileBrickPuppet;
+	case EHueTileArt::Barrier:  return &HuePuppetShapes::TileBarrierPuppet;
+	default:                    return nullptr;
+	}
+}
+
+UMaterialInterface* HuePuppets::GetPuppetMaterial()
+{
+	static TWeakObjectPtr<UMaterialInterface> Cache;
+	if (UMaterialInterface* Cached = Cache.Get())
+	{
+		return Cached;
+	}
+	UMaterialInterface* Loaded = HuePuppetPrivate::LoadMaterial(HuePuppetPrivate::PuppetMaterialPath);
+	if (!Loaded)
+	{
+		UE_LOG(LogHuebox, Warning, TEXT("Shadow puppet: %s is missing (run Scripts/create_materials.py) - flat fallback"), HuePuppetPrivate::PuppetMaterialPath);
+		return APulseBlock::GetBasicMaterial();
+	}
+	Cache = Loaded;
+	return Loaded;
+}
+
+void HuePuppets::CreatePieceSections(UProceduralMeshComponent* Mesh, const FHuePuppetDef& Def, int32 PieceIndex,
+	UMaterialInterface* Leather, UMaterialInterface* Glow)
+{
+	using namespace HuePuppetPrivate;
+	if (!Mesh || PieceIndex < 0 || PieceIndex >= Def.NumPieces)
+	{
+		return;
+	}
+	const FHuePuppetPieceDef& Piece = Def.Pieces[PieceIndex];
+	TArray<FVector> Vertices;
+	TArray<FVector> Normals;
+	TArray<FColor> Colors;
+	TArray<int32> Triangles;
+	for (int32 Section = 0; Section < 2; ++Section)
+	{
+		const FHuePuppetSectionRange& Range = Piece.Sections[Section];
+		if (Range.NumIndices <= 0 || Range.NumVertices <= 0)
+		{
+			continue;
+		}
+		Vertices.Reset(Range.NumVertices);
+		Normals.Reset(Range.NumVertices);
+		Colors.Reset(Range.NumVertices);
+		Triangles.Reset(Range.NumIndices);
+		for (int32 V = 0; V < Range.NumVertices; ++V)
+		{
+			const float* Src = Def.Vertices + static_cast<int64>(Range.FirstVertex + V) * 6;
+			Vertices.Emplace(Src[0], Src[1], Src[2]);
+			Normals.Emplace(0.f, 1.f, 0.f); // flat, facing along the piece's depth axis
+			Colors.Emplace(Quantize(Src[3]), Quantize(Src[4]), Quantize(Src[5]), 255);
+		}
+		for (int32 I = 0; I < Range.NumIndices; ++I)
+		{
+			Triangles.Add(Def.Indices[Range.FirstIndex + I]);
+		}
+		Mesh->CreateMeshSection(Section, Vertices, Triangles, Normals, TArray<FVector2D>(), Colors, TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
+		Mesh->SetMaterial(Section, Section == 0 ? Leather : Glow);
+	}
+}
+
 UHueShadowPuppetComponent::UHueShadowPuppetComponent()
 {
 	// The rig drives it (UpdatePuppet) from its own tick.
@@ -130,22 +203,13 @@ void UHueShadowPuppetComponent::Build(EHuePuppetFigure InFigure, float InScale)
 	FallRoot = MakeScene(this, TEXT("PuppetFall"));
 	FlipRoot = MakeScene(FallRoot, TEXT("PuppetFlip"));
 
-	UMaterialInterface* PuppetMaterial = LoadMaterial(PuppetMaterialPath);
-	if (!PuppetMaterial)
-	{
-		UE_LOG(LogHuebox, Warning, TEXT("Shadow puppet: %s is missing (run Scripts/create_materials.py) - flat fallback"), PuppetMaterialPath);
-		PuppetMaterial = APulseBlock::GetBasicMaterial();
-	}
+	UMaterialInterface* PuppetMaterial = HuePuppets::GetPuppetMaterial();
 	LeatherMID = PuppetMaterial ? UMaterialInstanceDynamic::Create(PuppetMaterial, this) : nullptr;
 	GlowMID = PuppetMaterial ? UMaterialInstanceDynamic::Create(PuppetMaterial, this) : nullptr;
 
 	// ---- Pieces: one procedural mesh each, attached along the joints (parents come first in the data) ----------
 	PieceMeshes.Reset();
 	Angles.Init(0.f, Def->NumPieces);
-	TArray<FVector> Vertices;
-	TArray<FVector> Normals;
-	TArray<FColor> Colors;
-	TArray<int32> Triangles;
 	for (int32 Index = 0; Index < Def->NumPieces; ++Index)
 	{
 		const FHuePuppetPieceDef& Piece = Def->Pieces[Index];
@@ -162,32 +226,7 @@ void UHueShadowPuppetComponent::Build(EHuePuppetFigure InFigure, float InScale)
 		Mesh->SetCanEverAffectNavigation(false);
 		Mesh->SetCastShadow(false);
 		Mesh->RegisterComponent();
-
-		for (int32 Section = 0; Section < 2; ++Section)
-		{
-			const FHuePuppetSectionRange& Range = Piece.Sections[Section];
-			if (Range.NumIndices <= 0 || Range.NumVertices <= 0)
-			{
-				continue;
-			}
-			Vertices.Reset(Range.NumVertices);
-			Normals.Reset(Range.NumVertices);
-			Colors.Reset(Range.NumVertices);
-			Triangles.Reset(Range.NumIndices);
-			for (int32 V = 0; V < Range.NumVertices; ++V)
-			{
-				const float* Src = Def->Vertices + static_cast<int64>(Range.FirstVertex + V) * 6;
-				Vertices.Emplace(Src[0], Src[1], Src[2]);
-				Normals.Emplace(0.f, 1.f, 0.f); // flat, facing the viewer
-				Colors.Emplace(Quantize(Src[3]), Quantize(Src[4]), Quantize(Src[5]), 255);
-			}
-			for (int32 I = 0; I < Range.NumIndices; ++I)
-			{
-				Triangles.Add(Def->Indices[Range.FirstIndex + I]);
-			}
-			Mesh->CreateMeshSection(Section, Vertices, Triangles, Normals, TArray<FVector2D>(), Colors, TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
-			Mesh->SetMaterial(Section, Section == 0 ? LeatherMID.Get() : GlowMID.Get());
-		}
+		HuePuppets::CreatePieceSections(Mesh, *Def, Index, LeatherMID, GlowMID);
 		PieceMeshes.Add(Mesh);
 	}
 

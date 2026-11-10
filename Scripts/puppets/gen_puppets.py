@@ -216,6 +216,16 @@ class Piece:
         for t in stroke_tris(pts, w, closed):
             self.tris.append((GLOW, depth, (weight, weight, weight), t))
 
+    def glow_rgb(self, poly, rgb, depth=DEPTH_GLOW):
+        """An opening that always shows one colour (vertex colour), whatever light the block is given."""
+        for t in triangulate(poly):
+            self.tris.append((GLOW, depth, rgb, t))
+
+    def band(self, pts, w, dye, closed=False, depth=DEPTH_FILL):
+        """A strip of dyed hide along a line (rings, channels)."""
+        for t in stroke_tris(pts, w, closed):
+            self.tris.append((LEATHER, depth, dye, t))
+
     # Carved motifs --------------------------------------------------------------------------------------------
     def cloud(self, cx, cz, r, cw=False, w=0.45, start=0.0):
         self.glow_line(spiral(cx, cz, r, 1.5, start, 26, cw), w)
@@ -667,6 +677,175 @@ def build_pane():
     return pup
 
 # ---------------------------------------------------------------------------------------------------------------
+# Tile pictures: carved pieces lying on the modules' wooden tiles, read from straight above.
+# Tile-local cm, centre (0, 0), half width 40. x = the block's facing (East at rest), z = screen up in the build view
+# (board South); board North, the facing turned +90 degrees, is -z.
+# ---------------------------------------------------------------------------------------------------------------
+
+WALNUT = (0.16, 0.09, 0.045)
+LACQUER = (0.42, 0.08, 0.04)
+PAPER = (0.95, 0.88, 0.72)
+LIGHT_R = (1.0, 0.16, 0.08)
+LIGHT_C = (0.04, 0.72, 1.0)
+TILE_HALF = 40.0
+
+
+def tile_piece(name):
+    pup = Puppet(name)
+    pup.height = 2.0 * TILE_HALF
+    return pup, pup.piece("art", -1, (0.0, 0.0), 0.0)
+
+
+def tile_frame(p, half=37.0):
+    """A thin ink frame just inside the tile edge."""
+    p.ink([(-half, -half), (half, -half), (half, half), (-half, half)], 1.0, closed=True)
+
+
+def chevron(p, x, z, size=4.0, w=1.4):
+    p.ink([(x - size, z + size), (x, z), (x - size, z - size)], w)
+
+
+def build_tile_turn():
+    pup, p = tile_piece("TileTurn")
+    cx, cz = TILE_HALF, -TILE_HALF          # the corner between the two ports (East, North)
+    arc = lambda r, a0, a1, step: [(cx + r * math.cos(math.radians(a)), cz + r * math.sin(math.radians(a)))
+                                   for a in range(a0, a1 + (1 if step > 0 else -1), step)]
+    channel = arc(53, 90, 180, 6) + arc(27, 180, 90, -6)
+    p.fill(channel, WALNUT)
+    groove = arc(40, 90, 180, 5)
+    p.glow_line(groove, 7.0)
+    p.ink(arc(40, 96, 174, 6), 0.8)
+    p.outline(channel, 1.2)
+    p.cloud(cx - 14.0, cz + 14.0, 6.0, cw=True, w=1.4)
+    p.cloud(-18.0, 18.0, 7.5, w=1.4)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_shift():
+    """Taiji: red and cyan, each holding a dot of the other - every part of the light flips to its opposite."""
+    pup, p = tile_piece("TileShift")
+    R = 22.0
+    p.fill(circle(0, 0, R + 3.0, 40), WALNUT)
+    p.glow_rgb(circle(0, 0, R, 40), LIGHT_C)
+    left = [(R * math.cos(math.radians(a)), R * math.sin(math.radians(a))) for a in range(90, 271, 6)]
+    left += [(0.5 * R * math.cos(math.radians(a)), -0.5 * R + 0.5 * R * math.sin(math.radians(a))) for a in range(-90, 91, 10)]
+    left += [(0.5 * R * math.cos(math.radians(a)), 0.5 * R + 0.5 * R * math.sin(math.radians(a))) for a in range(270, 89, -10)]
+    p.glow_rgb(left, LIGHT_R, DEPTH_GLOW + 0.01)
+    p.glow_rgb(circle(0, 0.5 * R, 3.2, 14), LIGHT_C, DEPTH_GLOW + 0.02)
+    p.glow_rgb(circle(0, -0.5 * R, 3.2, 14), LIGHT_R, DEPTH_GLOW + 0.02)
+    s_curve = [(0.5 * R * math.cos(math.radians(a)), -0.5 * R + 0.5 * R * math.sin(math.radians(a))) for a in range(-90, 91, 10)]
+    s_curve += [(0.5 * R * math.cos(math.radians(a)), 0.5 * R + 0.5 * R * math.sin(math.radians(a))) for a in range(270, 89, -10)]
+    p.ink(s_curve, 0.9)
+    p.ink(circle(0, 0, R, 40), 1.4, closed=True)
+    for x in (-33.0, 34.0):
+        chevron(p, x, 0.0)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_delay():
+    """A dial (water clock): the ticks glow with the light it is holding; the time is written in the middle."""
+    pup, p = tile_piece("TileDelay")
+    p.band(circle(0, 0, 28.0, 48), 7.0, WALNUT, closed=True)
+    for i in range(12):
+        a = math.radians(90 - 30 * i)
+        p.glow(circle(28.0 * math.cos(a), 28.0 * math.sin(a), 1.7 if i % 3 == 0 else 1.1, 10))
+    p.ink(circle(0, 0, 31.5, 48), 0.8, closed=True)
+    p.ink(circle(0, 0, 24.5, 48), 0.8, closed=True)
+    # the hand points at the exit
+    p.ink([(24.0, 0.0), (32.5, 0.0)], 2.2)
+    chevron(p, 37.0, 0.0, 3.0, 1.2)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_mixer():
+    """Two channels (from the sides) meet in a round chamber and leave ahead as one."""
+    pup, p = tile_piece("TileMixer")
+    top = spline([(0.0, 40.0), (1.5, 24.0), (9.0, 10.0), (20.0, 2.0)], False, 6)
+    bottom = [(x, -z) for x, z in top]
+    out = [(20.0, 0.0), (40.0, 0.0)]
+    for path in (top, bottom, out):
+        p.band(path, 15.0, WALNUT)
+    for path in (top, bottom, out):
+        p.glow_line(path, 5.0)
+    p.fill(circle(20.0, 0.0, 11.0, 28), WALNUT, DEPTH_FILL + 0.01)
+    p.glow(circle(20.0, 0.0, 7.5, 28), 1.0, DEPTH_GLOW + 0.01)
+    p.ink(circle(20.0, 0.0, 7.5, 28), 0.9, closed=True)
+    for i in range(6):
+        a = math.radians(60 * i)
+        p.fill(ellipse(20.0 + 3.6 * math.cos(a), 3.6 * math.sin(a), 2.2, 0.8, 60 * i, 8), INK, DEPTH_INK + 0.01)
+    p.cloud(-20.0, 0.0, 8.0, w=1.4)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_source():
+    """A lamp of red lacquer with lotus petals; its window glows in the colour it sends out."""
+    pup, p = tile_piece("TileSource")
+    p.fill(circle(0, 0, 27.0, 40), LACQUER)
+    for i in range(12):
+        a = 15 + 30 * i
+        ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+        p.glow(ellipse(22.0 * ca, 22.0 * sa, 4.2, 2.2, a, 10), 0.7)
+    p.glow(circle(0, 0, 16.0, 36), 1.0, DEPTH_GLOW + 0.01)
+    p.ink(circle(0, 0, 16.0, 36), 1.2, closed=True)
+    p.ink(circle(0, 0, 27.0, 40), 1.4, closed=True)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_receiver():
+    """A round carved window: the light she receives shows in its panes; her colour letter in the middle."""
+    pup, p = tile_piece("TileReceiver")
+    p.band(circle(0, 0, 29.0, 48), 6.0, WALNUT, closed=True)
+    p.glow(circle(0, 0, 26.0, 40))
+    p.fill(circle(0, 0, 13.0, 32), PAPER, DEPTH_GLOW + 0.01)
+    for i in range(8):
+        a = math.radians(22.5 + 45 * i)
+        p.ink([(13.0 * math.cos(a), 13.0 * math.sin(a)), (26.5 * math.cos(a), 26.5 * math.sin(a))], 1.4)
+    p.ink(circle(0, 0, 19.5, 40), 1.0, closed=True)
+    p.ink(circle(0, 0, 13.0, 32), 1.2, closed=True)
+    tile_frame(p)
+    return pup
+
+
+def build_tile_brick():
+    """A glazed brick with an ice-crack pattern (冰裂纹): the whole face glows in its colour."""
+    pup, p = tile_piece("TileBrick")
+    half = 36.0
+    p.fill([(-half - 2, -half - 2), (half + 2, -half - 2), (half + 2, half + 2), (-half - 2, half + 2)], WALNUT)
+    p.glow([(-half, -half), (half, -half), (half, half), (-half, half)])
+    cracks =[((-36, 10), (-14, 16), (-6, 36)), ((-14, 16), (0, 4), (16, 12), (36, 8)), ((0, 4), (-4, -14), (-36, -20)),
+              ((-4, -14), (10, -18), (14, -36)), ((10, -18), (24, -6), (16, 12)), ((24, -6), (36, -12)), ((16, 12), (22, 36))]
+    for crack in cracks:
+        p.ink(list(crack), 1.6)
+    p.fill(circle(0, 0, 10.5, 28), PAPER, DEPTH_INK + 0.01)
+    p.ink(circle(0, 0, 10.5, 28), 1.2, closed=True)
+    p.ink([(-half, -half), (half, -half), (half, half), (-half, half)], 1.6, closed=True)
+    return pup
+
+
+def build_tile_barrier():
+    """A block of dark wood: grain and two knots, nothing gets through."""
+    pup, p = tile_piece("TileBarrier")
+    half = 46.0
+    p.fill([(-half, -half), (half, -half), (half, half), (-half, half)], (0.09, 0.055, 0.03))
+    for k in range(7):
+        z0 = -36.0 + 12.0 * k
+        p.band(spline([(-46, z0), (-20, z0 + 2.5), (6, z0 - 1.5), (30, z0 + 2.0), (46, z0)], False, 6), 1.1, (0.2, 0.12, 0.06))
+    for cx, cz in ((-14.0, 8.0), (20.0, -18.0)):
+        p.band(ellipse(cx, cz, 6.0, 3.0, 0, 18), 1.0, (0.2, 0.12, 0.06), closed=True)
+        p.band(ellipse(cx, cz, 3.0, 1.4, 0, 14), 1.0, (0.2, 0.12, 0.06), closed=True)
+    pup.height = 2.0 * half
+    return pup
+
+
+TILE_BUILDERS = [build_tile_turn, build_tile_shift, build_tile_delay, build_tile_mixer, build_tile_source,
+                 build_tile_receiver, build_tile_brick, build_tile_barrier]
+
+# ---------------------------------------------------------------------------------------------------------------
 # Output: C++ data
 # ---------------------------------------------------------------------------------------------------------------
 
@@ -876,13 +1055,31 @@ def write_preview(path, dancer, partner):
                    + puppet_draws(build_pane(), {}, 50, yellow), -80.0, 75.0, -6.0, 140.0, 7.0)
 
 
+def write_tiles_preview(path, tiles):
+    """The tile pictures on their pale wooden tiles, as the build view sees them (x right, z up)."""
+    wood = (0.55, 0.42, 0.27)
+    glows = {"TileSource": (1.0, 0.16, 0.08), "TileReceiver": (0.04, 0.72, 1.0), "TileBrick": (0.04, 0.72, 1.0),
+             "TileDelay": (1.0, 0.86, 0.08)}
+    draws = []
+    for i, tile in enumerate(tiles):
+        ox = 50.0 + 100.0 * i
+        half = 40.0 if tile.name != "TileBarrier" else 49.0
+        square = [(ox - half, -half), (ox + half, -half), (ox + half, half), (ox - half, half)]
+        draws += [(-10.0, wood, t) for t in triangulate(square)]
+        draws += puppet_draws(tile, {}, ox, glows.get(tile.name, (1.0, 0.92, 0.75)), light=(1.0, 1.0, 1.0), transmission=1.0)
+    render_png(path, draws, 0.0, 100.0 * len(tiles), -50.0, 50.0, 2.4)
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.normpath(os.path.join(here, "..", ".."))
     dancer, partner = build_dancer(), build_partner()
-    write_inl(os.path.join(root, "Source", "Huebox", "Rig", "HuePuppetShapes.inl"), [dancer, partner, build_pane()])
+    tiles = [build() for build in TILE_BUILDERS]
+    write_inl(os.path.join(root, "Source", "Huebox", "Rig", "HuePuppetShapes.inl"), [dancer, partner, build_pane()] + tiles)
     if "--png" in sys.argv:
         write_preview(sys.argv[sys.argv.index("--png") + 1], dancer, partner)
+    if "--tiles" in sys.argv:
+        write_tiles_preview(sys.argv[sys.argv.index("--tiles") + 1], tiles)
 
 
 if __name__ == "__main__":

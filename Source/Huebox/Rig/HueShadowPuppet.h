@@ -81,10 +81,33 @@ struct FHuePuppetDef
 	float Height;
 };
 
+/** The carved picture lying on a block's tile (one generated piece, tile-local cm, x = the block's facing). */
+enum class EHueTileArt : uint8
+{
+	None,
+	Turn,
+	Shift,
+	Delay,
+	Mixer,
+	Source,
+	Receiver,
+	Brick,
+	Barrier,
+};
+
 namespace HuePuppets
 {
 	/** Generated geometry of Figure, or null for None. */
 	HUEBOX_API const FHuePuppetDef* GetDef(EHuePuppetFigure Figure);
+	/** Generated tile picture, or null for None. */
+	HUEBOX_API const FHuePuppetDef* GetTileArt(EHueTileArt Art);
+
+	/** Fills Mesh with piece PieceIndex of Def: section 0 (hide and ink) gets Leather, section 1 (openings) Glow. */
+	HUEBOX_API void CreatePieceSections(UProceduralMeshComponent* Mesh, const FHuePuppetDef& Def, int32 PieceIndex,
+		UMaterialInterface* Leather, UMaterialInterface* Glow);
+
+	/** /Game/Huebox/Materials/M_HuePuppet (vertex colour x "Color"), or a basic fallback. */
+	HUEBOX_API UMaterialInterface* GetPuppetMaterial();
 }
 
 /**

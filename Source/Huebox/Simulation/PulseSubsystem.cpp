@@ -679,7 +679,7 @@ void UPulseSubsystem::UpdateVisuals()
 		const double Alpha = HuePulsePrivate::TravelAlpha(Pulse->DepartTimeMs, Pulse->Data.ArrivalTimeMs, NowMs);
 		const FVector From = CellToWorld(Pulse->FromCell);
 		const FVector To = CellToWorld(Pulse->Data.Cell);
-		Visual->SetActorLocation(FMath::Lerp(From, To, Alpha));
+		Visual->SetTravel(From, To, Alpha);
 		// Colour can change inside a colour-shift block.
 		Visual->SetColor(Pulse->Data.Color);
 	}

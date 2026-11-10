@@ -40,6 +40,8 @@ public:
 	virtual void GetPorts(TArray<FHuePort>& OutPorts) const override;
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
+	/** The taiji's red and cyan as drawn. */
+	virtual FLinearColor GetArtGlowColor() const override;
 };
 
 /**
@@ -66,6 +68,8 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
+	/** The dial's ticks show the colour it holds. */
+	virtual FLinearColor GetArtGlowColor() const override;
 
 	float GetDelaySeconds() const { return DelaySeconds; }
 	/** Snaps to 0.25 s steps and clamps to [0, 6]. */
@@ -112,6 +116,8 @@ public:
 	virtual FString GetRuleText() const override;
 	virtual FString GetStateText() const override;
 	virtual void RefreshVisuals() override;
+	/** The chamber shows the colour waiting for its partner. */
+	virtual FLinearColor GetArtGlowColor() const override;
 
 	/** Returns 0 or 1 for a valid input, INDEX_NONE if TravelDir enters through a non-input face. */
 	int32 GetInputIndexForTravel(EHueDir TravelDir) const;

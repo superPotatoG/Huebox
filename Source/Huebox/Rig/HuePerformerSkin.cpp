@@ -35,9 +35,12 @@ UHueSkin_ShadowPuppet::UHueSkin_ShadowPuppet()
 	PartnerPuppet = EHuePuppetFigure::Partner;
 
 	bShowBackdrop = true;
-	// Lamp light through the screen: warm, a little yellow (oil lamp).
-	BackdropColor = FLinearColor(3.0f, 2.55f, 1.85f);
+	// Lamp light through the screen: warm amber (oil lamp), clearly darker than the white light in her openings.
+	BackdropColor = FLinearColor(2.2f, 1.75f, 1.1f);
 	BackdropSignalTint = 0.22f;
+	// The stop zone is a warm lamp pool, never white: white is her braking colour.
+	SpotlightColor = FLinearColor(7.5f, 4.6f, 1.6f);
+	PuppetTransmission = 0.4f;
 	bZoneAsSpotlight = true;
 	bShowTheatre = true;
 }

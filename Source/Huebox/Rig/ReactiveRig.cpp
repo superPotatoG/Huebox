@@ -112,6 +112,8 @@ namespace HueRigPrivate
 	constexpr float PaneGlow = 0.75f;
 	constexpr float PaneCrackedGlow = 1.6f;
 	static const FLinearColor PaneWood(0.34f, 0.18f, 0.08f);
+	/** Her openings in white light (x the skin's glow): cooler and brighter than the plain N colour. */
+	static const FLinearColor WhiteOpeningGlow(1.15f, 1.25f, 1.45f);
 
 	// Theatre (skins with bShowTheatre), rig-local cm.
 	const TCHAR* const ScreenMaterialPath = TEXT("/Game/Huebox/Materials/M_HueScreen.M_HueScreen");
@@ -1255,8 +1257,10 @@ void AReactiveRig::UpdateColorVisuals()
 	{
 		return;
 	}
-	// The paper screen glows slightly in the performer's current signal colour.
-	const FLinearColor Tint = FMath::Lerp(ActiveSkin->BackdropColor, Color * ActiveSkin->BackdropColor.GetMax(), ActiveSkin->BackdropSignalTint);
+	// The paper screen glows slightly in the performer's current signal colour (not for white: that would only wash
+	// the screen out behind her white openings).
+	const FLinearColor Tint = CurrentColor == EHueColor::N ? ActiveSkin->BackdropColor
+		: FMath::Lerp(ActiveSkin->BackdropColor, Color * ActiveSkin->BackdropColor.GetMax(), ActiveSkin->BackdropSignalTint);
 	if (BackdropMID)
 	{
 		BackdropMID->SetVectorParameterValue(TEXT("Color"), Tint);
@@ -1266,7 +1270,8 @@ void AReactiveRig::UpdateColorVisuals()
 	if (Puppet)
 	{
 		Puppet->SetLeatherLight(Tint * ActiveSkin->PuppetTransmission);
-		Puppet->SetGlowColor(Color * ActiveSkin->PuppetGlow);
+		// White openings: a cool, brighter white, so they stand out from the warm screen and its lamp pools.
+		Puppet->SetGlowColor(CurrentColor == EHueColor::N ? HueRigPrivate::WhiteOpeningGlow * ActiveSkin->PuppetGlow : Color * ActiveSkin->PuppetGlow);
 	}
 	if (PartnerPuppet)
 	{

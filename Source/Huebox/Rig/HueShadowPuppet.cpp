@@ -100,6 +100,11 @@ const FHuePuppetDef* HuePuppets::GetTileArt(EHueTileArt Art)
 	}
 }
 
+const FHuePuppetDef* HuePuppets::GetFrieze()
+{
+	return &HuePuppetShapes::FriezePuppet;
+}
+
 UMaterialInterface* HuePuppets::GetPuppetMaterial()
 {
 	static TWeakObjectPtr<UMaterialInterface> Cache;

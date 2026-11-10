@@ -19,6 +19,7 @@
 #include "Materials/MaterialInterface.h"
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "PhysicsEngine/BodyInstance.h"
+#include "ProceduralMeshComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 // Named (not anonymous) namespace: unity builds merge several .cpp files into one translation unit.
@@ -111,6 +112,46 @@ namespace HueRigPrivate
 	constexpr float PaneGlow = 0.75f;
 	constexpr float PaneCrackedGlow = 1.6f;
 	static const FLinearColor PaneWood(0.34f, 0.18f, 0.08f);
+
+	// Theatre (skins with bShowTheatre), rig-local cm.
+	const TCHAR* const ScreenMaterialPath = TEXT("/Game/Huebox/Materials/M_HueScreen.M_HueScreen");
+	const TCHAR* const PoolMaterialPath = TEXT("/Game/Huebox/Materials/M_HueGlowPool.M_HueGlowPool");
+	const TCHAR* const PlaneMeshPath = TEXT("/Engine/BasicShapes/Plane.Plane");
+	constexpr float PillarWidth = 26.f;
+	constexpr float PillarFrontY = -32.f;
+	constexpr float LintelHeight = 52.f;
+	constexpr float LintelFrontY = -28.f;
+	/** The sill: the stage edge the puppets stand on; it hides the rods and carries the zone captions. */
+	constexpr float SillFrontY = 18.f;
+	constexpr float SillBottomZ = -26.f;
+	/** The low front rail of the stage (栏板): it hides where the rods go down, and carries the zone captions. */
+	constexpr float RailTopZ = 26.f;
+	constexpr float RailDepth = 5.f;
+	constexpr float SillCaptionZ = 13.f;
+	constexpr float SillCaptionSize = 15.f;
+	constexpr float CurtainWidth = 70.f;
+	constexpr int32 CurtainFolds = 5;
+	constexpr float ValanceHeight = 26.f;
+	constexpr float FriezeSpacing = 100.f;
+	/** The dark hall behind the screen: how far it reaches past the screen and how high. */
+	constexpr float HallMargin = 1000.f;
+	constexpr float HallTop = 1000.f;
+	static const FLinearColor HallColor(0.008f, 0.006f, 0.005f);
+	static const FLinearColor FriezeGlow(1.5f, 1.05f, 0.45f);
+	static const FLinearColor FriezeLeather(0.9f, 0.85f, 0.8f);
+	static const FColor SillCaptionColor(240, 214, 160);
+	/** Additive pools of light: strength relative to the opaque spotlight colours. */
+	constexpr float PoolStrength = 0.32f;
+
+	template <typename T>
+	T* LoadCachedAsset(TWeakObjectPtr<T>& Cache, const TCHAR* Path)
+	{
+		if (!Cache.IsValid())
+		{
+			Cache = LoadObject<T>(nullptr, Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+		}
+		return Cache.Get();
+	}
 
 	/** Two short lines for the stage (the feedback log has the long form, HueColor::MotionMeaning). The partner sits at
 	 *  the left end, so ">>" is away from her and "<<" back towards her. */
@@ -563,7 +604,10 @@ void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 FLinearColor AReactiveRig::StrikeZoneColor(EHueColor KeyColor, bool bLit) const
 {
 	// HDR emissive on the unlit material: dim enough to read as "waiting" against the glowing screen, bright once lit.
-	return HueColor::ToLinear(KeyColor) * (bLit ? HueRigPrivate::StrikeZoneLitGlow : HueRigPrivate::StrikeZoneDimGlow);
+	// The theatre's pools of light are added to the screen, so they need less.
+	const bool bPool = ActiveSkin && ActiveSkin->bShowBackdrop && ActiveSkin->bShowTheatre;
+	return HueColor::ToLinear(KeyColor) * (bLit ? HueRigPrivate::StrikeZoneLitGlow : HueRigPrivate::StrikeZoneDimGlow)
+		* (bPool ? HueRigPrivate::PoolStrength : 1.f);
 }
 
 void AReactiveRig::RestoreStageBoards()
@@ -1539,6 +1583,7 @@ void AReactiveRig::ApplySkin()
 	}
 
 	// ---- Backlit paper screen ------------------------------------------------------------------------------
+	const bool bTheatre = Skin->bShowBackdrop && Skin->bShowTheatre;
 	if (Skin->bShowBackdrop)
 	{
 		const float Length = TrackLength + BackdropNearOverhang + BackdropFarOverhang;
@@ -1547,6 +1592,94 @@ void AReactiveRig::ApplySkin()
 			FVector(CenterX, BackdropY, Skin->BackdropHeight * 0.5f), FRotator::ZeroRotator,
 			FVector(Length / 100.f, BackdropThickness / 100.f, Skin->BackdropHeight / 100.f), Skin->BackdropColor);
 		BackdropMID = Cast<UMaterialInstanceDynamic>(Screen->GetMaterial(0));
+		static TWeakObjectPtr<UMaterialInterface> ScreenMaterial;
+		if (UMaterialInterface* Paper = bTheatre ? LoadCachedAsset(ScreenMaterial, ScreenMaterialPath) : nullptr)
+		{
+			// Lamp-lit paper (texture, lamp pools and flicker in the material); "Color" is still the tinted light.
+			BackdropMID = UMaterialInstanceDynamic::Create(Paper, Screen);
+			BackdropMID->SetVectorParameterValue(TEXT("Color"), Skin->BackdropColor);
+			Screen->SetMaterial(0, BackdropMID);
+		}
+	}
+
+	// ---- Theatre (戏台) round the screen -------------------------------------------------------------------
+	for (UStaticMeshComponent* Part : { TrackMesh.Get(), NearStop.Get(), FarStop.Get() })
+	{
+		// The sill takes the track's place; the stops keep their collision (they limit the physics body).
+		if (IsValid(Part))
+		{
+			Part->SetVisibility(!bTheatre);
+		}
+	}
+	if (bTheatre)
+	{
+		const float MinX = -BackdropNearOverhang;
+		const float MaxX = TrackLength + BackdropFarOverhang;
+		const float Top = Skin->BackdropHeight;
+		const float ScreenFront = BackdropY + BackdropThickness * 0.5f;
+		auto Box = [&](const FVector& Min, const FVector& Max, const FLinearColor& Color, bool bLit) -> UStaticMeshComponent*
+		{
+			UStaticMeshComponent* Part = AddMesh(SceneRoot, APulseBlock::GetCubeMesh(), (Min + Max) * 0.5f, FRotator::ZeroRotator,
+				(Max - Min) / 100.f, Color);
+			if (bLit)
+			{
+				TintComponent(Part, Color); // lacquered wood takes the scene's light
+			}
+			return Part;
+		};
+		// The dark hall behind: no sky over or beside the stage.
+		Box(FVector(MinX - HallMargin, BackdropY - 34.f, -80.f), FVector(MaxX + HallMargin, BackdropY - 30.f, HallTop), HallColor, false);
+		// Pillars, lintel, sill.
+		for (const float X : { MinX - PillarWidth * 0.5f, MaxX + PillarWidth * 0.5f })
+		{
+			Box(FVector(X - PillarWidth * 0.5f, BackdropY - 4.f, SillBottomZ), FVector(X + PillarWidth * 0.5f, PillarFrontY, Top + LintelHeight),
+				Skin->TheatreLacquer, true);
+		}
+		Box(FVector(MinX - PillarWidth, BackdropY - 6.f, Top - 4.f), FVector(MaxX + PillarWidth, LintelFrontY, Top + LintelHeight),
+			Skin->TheatreLacquer, true);
+		Box(FVector(MinX - PillarWidth, BackdropY - 4.f, SillBottomZ), FVector(MaxX + PillarWidth, SillFrontY, TrackHeight),
+			Skin->TheatreLacquer, true);
+		// Unlit: the rail faces away from the scene's light, and its captions (lit text) must stand out from it.
+		Box(FVector(MinX - PillarWidth, SillFrontY - RailDepth, SillBottomZ), FVector(MaxX + PillarWidth, SillFrontY, RailTopZ),
+			Skin->TheatreLacquer * 1.5f, false);
+		// Curtains at both ends of the screen (folds in two shades) and a valance under the lintel.
+		const FLinearColor CurtainDark = Skin->CurtainColor * 0.6f;
+		for (const float Start : { MinX, MaxX - CurtainWidth })
+		{
+			const float FoldWidth = CurtainWidth / CurtainFolds;
+			for (int32 Fold = 0; Fold < CurtainFolds; ++Fold)
+			{
+				const float X0 = Start + Fold * FoldWidth;
+				const float Depth = (Fold % 2 == 0) ? 3.f : 0.f;
+				Box(FVector(X0, ScreenFront + 1.f + Depth, TrackHeight), FVector(X0 + FoldWidth, ScreenFront + 4.f + Depth, Top),
+					Fold % 2 == 0 ? Skin->CurtainColor : CurtainDark, true);
+			}
+		}
+		Box(FVector(MinX, ScreenFront + 1.f, Top - ValanceHeight), FVector(MaxX, ScreenFront + 5.f, Top), Skin->CurtainColor, true);
+		// Carved frieze along the lintel's front face.
+		if (const FHuePuppetDef* Frieze = HuePuppets::GetFrieze())
+		{
+			if (UMaterialInterface* PuppetMaterial = HuePuppets::GetPuppetMaterial())
+			{
+				UMaterialInstanceDynamic* FriezeLeatherMID = UMaterialInstanceDynamic::Create(PuppetMaterial, this);
+				UMaterialInstanceDynamic* FriezeGlowMID = UMaterialInstanceDynamic::Create(PuppetMaterial, this);
+				FriezeLeatherMID->SetVectorParameterValue(TEXT("Color"), FriezeLeather);
+				FriezeGlowMID->SetVectorParameterValue(TEXT("Color"), FriezeGlow);
+				const int32 Count = FMath::Max(1, FMath::FloorToInt32((MaxX - MinX) / FriezeSpacing));
+				const float Start = (MinX + MaxX) * 0.5f - (Count - 1) * FriezeSpacing * 0.5f;
+				for (int32 Index = 0; Index < Count; ++Index)
+				{
+					UProceduralMeshComponent* Piece = NewObject<UProceduralMeshComponent>(this);
+					Piece->SetupAttachment(SceneRoot);
+					Piece->SetRelativeLocation(FVector(Start + Index * FriezeSpacing, LintelFrontY + 0.3f, Top + LintelHeight * 0.5f));
+					Piece->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+					Piece->SetCastShadow(false);
+					Piece->RegisterComponent();
+					HuePuppets::CreatePieceSections(Piece, *Frieze, 0, FriezeLeatherMID, FriezeGlowMID);
+					SkinComponents.Add(Piece);
+				}
+			}
+		}
 	}
 
 	// Markers follow the skin's style (spotlight vs floor plate).
@@ -1705,7 +1838,44 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 		return;
 	}
 	const bool bSpotlight = ActiveSkin && ActiveSkin->bShowBackdrop && ActiveSkin->bZoneAsSpotlight;
+	const bool bTheatre = ActiveSkin && ActiveSkin->bShowBackdrop && ActiveSkin->bShowTheatre;
 	int32 BoardIndex = 0;
+
+	// A zone on the screen: a soft additive pool of lamp light in the theatre, an opaque disc otherwise. Its caption
+	// goes on the sill's front in the theatre (the lintel covers the space above the screen).
+	auto AddZoneLight = [this, bTheatre](float CenterX, float Length, const FLinearColor& Color) -> UStaticMeshComponent*
+	{
+		const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
+		const FVector Center(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f);
+		static TWeakObjectPtr<UStaticMesh> PlaneMesh;
+		static TWeakObjectPtr<UMaterialInterface> PoolMaterial;
+		UStaticMesh* Plane = bTheatre ? LoadCachedAsset(PlaneMesh, PlaneMeshPath) : nullptr;
+		UMaterialInterface* Pool = bTheatre ? LoadCachedAsset(PoolMaterial, PoolMaterialPath) : nullptr;
+		if (Plane && Pool)
+		{
+			// The engine plane lies in XY facing +Z: roll 90 turns it to face the audience (+Y).
+			UStaticMeshComponent* Light = AddMarkerMesh(Center, FVector(Diameter / 100.f, Diameter / 100.f, 1.f), Color,
+				Plane, /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
+			UMaterialInstanceDynamic* PoolMID = UMaterialInstanceDynamic::Create(Pool, Light);
+			PoolMID->SetVectorParameterValue(TEXT("Color"), Color);
+			Light->SetMaterial(0, PoolMID);
+			return Light;
+		}
+		return AddMarkerMesh(Center, FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), Color,
+			APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
+	};
+	auto AddZoneCaption = [this, bTheatre](const FString& Text, float CenterX, const FLinearColor& Color)
+	{
+		if (bTheatre)
+		{
+			UTextRenderComponent* Caption = AddMarkerLabel(Text, FVector(CenterX, SillFrontY + 0.5f, SillCaptionZ), Color, SillCaptionSize);
+			Caption->SetTextRenderColor(SillCaptionColor);
+		}
+		else
+		{
+			AddMarkerLabel(Text, FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), Color);
+		}
+	};
 
 	for (const FHueObjective& Objective : Objectives)
 	{
@@ -1736,11 +1906,8 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 			if (bSpotlight)
 			{
 				// A glowing spotlight circle on the paper screen (disc = cylinder rolled to face the viewer).
-				const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
-				AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
-					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), ActiveSkin->SpotlightColor,
-					APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
-				AddMarkerLabel(TEXT("STOP HERE"), FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), ZoneColor);
+				AddZoneLight(CenterX, Length, ActiveSkin->SpotlightColor * (bTheatre ? PoolStrength : 1.f));
+				AddZoneCaption(TEXT("STOP HERE"), CenterX, ZoneColor);
 			}
 			else
 			{
@@ -1765,11 +1932,8 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 			UStaticMeshComponent* Glow = nullptr;
 			if (bSpotlight)
 			{
-				const float Diameter = FMath::Min(Length, ActiveSkin->BackdropHeight * 0.9f);
-				Glow = AddMarkerMesh(FVector(CenterX, SpotlightY, ActiveSkin->BackdropHeight * 0.45f),
-					FVector(Diameter / 100.f, Diameter / 100.f, 0.01f), StrikeZoneColor(Objective.Color, false),
-					APulseBlock::GetCylinderMesh(), /*bFlat*/ true, FRotator(0.f, 0.f, 90.f));
-				AddMarkerLabel(Caption, FVector(CenterX, SpotlightY + 2.f, ActiveSkin->BackdropHeight + 18.f), KeyColor);
+				Glow = AddZoneLight(CenterX, Length, StrikeZoneColor(Objective.Color, false));
+				AddZoneCaption(Caption, CenterX, KeyColor);
 			}
 			else
 			{

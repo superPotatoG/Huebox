@@ -154,6 +154,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
 	FLinearColor SpotlightColor = FLinearColor(9.0f, 8.2f, 6.0f);
 
+	/** A shadow-puppet theatre round the screen: lacquered pillars and lintel with a carved frieze, the sill the
+	 *  puppets stand on (it hides the rods and carries the zone captions), side curtains and a dark hall behind. The
+	 *  screen becomes lamp-lit paper and the zones soft pools of light. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
+	bool bShowTheatre = false;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
+	FLinearColor TheatreLacquer = FLinearColor(0.30f, 0.035f, 0.02f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
+	FLinearColor CurtainColor = FLinearColor(0.16f, 0.02f, 0.015f);
+
 	/** Optional material for flat-coloured parts; needs a vector parameter "Color". Null = /Game/Huebox/Materials/M_HueUnlit. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
 	TSoftObjectPtr<UMaterialInterface> FlatMaterial;

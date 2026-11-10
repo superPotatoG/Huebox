@@ -101,6 +101,8 @@ namespace HuePuppets
 	HUEBOX_API const FHuePuppetDef* GetDef(EHuePuppetFigure Figure);
 	/** Generated tile picture, or null for None. */
 	HUEBOX_API const FHuePuppetDef* GetTileArt(EHueTileArt Art);
+	/** One 100 cm repeat of the carved frieze on the stage lintel. */
+	HUEBOX_API const FHuePuppetDef* GetFrieze();
 
 	/** Fills Mesh with piece PieceIndex of Def: section 0 (hide and ink) gets Leather, section 1 (openings) Glow. */
 	HUEBOX_API void CreatePieceSections(UProceduralMeshComponent* Mesh, const FHuePuppetDef& Def, int32 PieceIndex,

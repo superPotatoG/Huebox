@@ -842,6 +842,29 @@ def build_tile_barrier():
     return pup
 
 
+def build_frieze():
+    """One 100 cm repeat of the carved frieze on the stage lintel (faces the audience like the puppets)."""
+    pup = Puppet("Frieze")
+    p = pup.piece("frieze", -1, (0.0, 0.0), 0.0)
+    W, H = 50.0, 20.0
+    p.fill([(-W, -H), (W, -H), (W, H), (-W, H)], (0.36, 0.05, 0.025))
+    p.glow_line([(-W, H - 3.0), (W, H - 3.0)], 1.6, 0.8)
+    p.glow_line([(-W, -H + 3.0), (W, -H + 3.0)], 1.6, 0.8)
+    for sx in (-1.0, 1.0):
+        p.cloud(sx * 26.0, 0.0, 9.0, cw=(sx > 0), w=2.0, start=(0.0 if sx > 0 else 180.0))
+        p.cloud(sx * 44.0, 4.0, 4.5, cw=(sx < 0), w=1.6)
+    p.fill(circle(0.0, 0.0, 10.0, 28), (0.12, 0.02, 0.01), DEPTH_FILL + 0.01)
+    p.glow(circle(0.0, 0.0, 7.5, 28), 1.0, DEPTH_GLOW + 0.01)
+    for i in range(8):
+        a = 22.5 + 45.0 * i
+        ca, sa = math.cos(math.radians(a)), math.sin(math.radians(a))
+        p.fill(ellipse(3.6 * ca, 3.6 * sa, 2.6, 0.9, a, 10), INK, DEPTH_INK + 0.03)
+    p.ink(circle(0.0, 0.0, 7.5, 28), 0.9, closed=True)
+    p.ink([(-W, -H), (W, -H), (W, H), (-W, H)], 1.2, closed=True)
+    pup.height = 2.0 * H
+    return pup
+
+
 TILE_BUILDERS = [build_tile_turn, build_tile_shift, build_tile_delay, build_tile_mixer, build_tile_source,
                  build_tile_receiver, build_tile_brick, build_tile_barrier]
 
@@ -1075,7 +1098,7 @@ def main():
     root = os.path.normpath(os.path.join(here, "..", ".."))
     dancer, partner = build_dancer(), build_partner()
     tiles = [build() for build in TILE_BUILDERS]
-    write_inl(os.path.join(root, "Source", "Huebox", "Rig", "HuePuppetShapes.inl"), [dancer, partner, build_pane()] + tiles)
+    write_inl(os.path.join(root, "Source", "Huebox", "Rig", "HuePuppetShapes.inl"), [dancer, partner, build_pane(), build_frieze()] + tiles)
     if "--png" in sys.argv:
         write_preview(sys.argv[sys.argv.index("--png") + 1], dancer, partner)
     if "--tiles" in sys.argv:

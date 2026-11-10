@@ -28,22 +28,24 @@
  */
 namespace HueHUD
 {
-	static const FLinearColor Backing(0.f, 0.f, 0.f, 0.55f);
-	static const FLinearColor TextColor(0.93f, 0.93f, 0.9f);
-	static const FLinearColor DimColor(0.62f, 0.62f, 0.6f);
-	static const FLinearColor AmberColor(1.f, 0.72f, 0.22f);
+	// The shadow-puppet theatre's paper: cards of lacquer-red paper with a gold-leaf line, cream ink.
+	static const FLinearColor Backing(0.11f, 0.03f, 0.018f, 0.84f);
+	static const FLinearColor CardEdge(0.86f, 0.62f, 0.26f, 0.85f);
+	static const FLinearColor TextColor(0.97f, 0.91f, 0.79f);
+	static const FLinearColor DimColor(0.76f, 0.64f, 0.5f);
+	static const FLinearColor AmberColor(1.f, 0.76f, 0.3f);
 	static const FLinearColor GoodColor(0.4f, 0.92f, 0.45f);
 	static const FLinearColor WarnColor(1.f, 0.82f, 0.3f);
 	static const FLinearColor BadColor(1.f, 0.38f, 0.32f);
 	static const FLinearColor InfoColor(0.55f, 0.85f, 1.f);
 
-	/** Minimap / tray icons use the look of the in-world "2D white props": white tiles, dark letters. */
-	static const FLinearColor TileWhite(0.92f, 0.92f, 0.9f);
-	static const FLinearColor TileInk(0.08f, 0.08f, 0.08f);
-	static const FLinearColor BarrierFill(0.03f, 0.03f, 0.035f);
-	static const FLinearColor BarrierEdge(0.42f, 0.42f, 0.42f);
-	static const FLinearColor MapFloor(0.17f, 0.15f, 0.13f, 0.92f);
-	static const FLinearColor MapLine(0.36f, 0.33f, 0.3f, 0.9f);
+	/** Minimap / tray icons follow the in-world tiles: pale wood, dark ink letters. */
+	static const FLinearColor TileWhite(0.86f, 0.74f, 0.55f);
+	static const FLinearColor TileInk(0.08f, 0.05f, 0.03f);
+	static const FLinearColor BarrierFill(0.09f, 0.055f, 0.03f);
+	static const FLinearColor BarrierEdge(0.42f, 0.3f, 0.2f);
+	static const FLinearColor MapFloor(0.12f, 0.045f, 0.028f, 0.92f);
+	static const FLinearColor MapLine(0.45f, 0.27f, 0.15f, 0.9f);
 
 	static constexpr float Margin = 24.f;
 	static constexpr float Pad = 8.f;
@@ -143,8 +145,34 @@ namespace HueHUD
 		}
 	}
 
+	/** A paper card: lacquer-red backing, a gold-leaf line just inside its edge and paper-cut marks at the corners. */
+	static void DrawCard(AHUD& HUD, float X, float Y, float W, float H, float Alpha = 1.f)
+	{
+		HUD.DrawRect(WithAlpha(Backing, Alpha), X, Y, W, H);
+		constexpr float Inset = 3.f;
+		constexpr float Line = 1.f;
+		constexpr float Corner = 5.f;
+		if (W < 2.f * Inset + 6.f || H < 2.f * Inset + 6.f)
+		{
+			return;
+		}
+		const FLinearColor Edge = WithAlpha(CardEdge, Alpha);
+		const float L = X + Inset;
+		const float T = Y + Inset;
+		const float R = X + W - Inset;
+		const float B = Y + H - Inset;
+		HUD.DrawRect(Edge, L, T, R - L, Line);
+		HUD.DrawRect(Edge, L, B - Line, R - L, Line);
+		HUD.DrawRect(Edge, L, T, Line, B - T);
+		HUD.DrawRect(Edge, R - Line, T, Line, B - T);
+		for (const FVector2f Point : { FVector2f(L, T), FVector2f(R, T), FVector2f(L, B), FVector2f(R, B) })
+		{
+			HUD.DrawRect(Edge, Point.X - Corner * 0.5f, Point.Y - Corner * 0.5f, Corner, Corner);
+		}
+	}
+
 	/**
-	 * Draws Lines inside one backing box. (X, Y) is the top-left corner, or the top-right corner when bAlignRight.
+	 * Draws Lines inside one backing card. (X, Y) is the top-left corner, or the top-right corner when bAlignRight.
 	 * Returns the box size.
 	 */
 	static FVector2f DrawPanel(AHUD& HUD, const TArray<FLine>& Lines, float X, float Y, float Scale, float MinContentWidth,
@@ -174,7 +202,7 @@ namespace HueHUD
 		const float BoxHeight = ContentHeight + 2.f * PadPx;
 		const float Left = bAlignRight ? X - BoxWidth : X;
 
-		HUD.DrawRect(WithAlpha(Backing, Alpha), Left, Y, BoxWidth, BoxHeight);
+		DrawCard(HUD, Left, Y, BoxWidth, BoxHeight, Alpha);
 
 		float CursorY = Y + PadPx;
 		for (int32 Index = 0; Index < Lines.Num(); ++Index)
@@ -971,7 +999,7 @@ void AHueboxHUD::DrawHotbar(const UHueBuildToolComponent* Tool)
 		const bool bSelected = Index == Inventory->GetSelectedIndex();
 		const float SX = X0 + Index * (SlotW + Gap);
 
-		DrawRect(HueHUD::WithAlpha(HueHUD::Backing, Alpha), SX, Y0, SlotW, SlotH);
+		HueHUD::DrawCard(*this, SX, Y0, SlotW, SlotH, Alpha);
 		if (bSelected)
 		{
 			HueHUD::DrawFrame(*this, SX, Y0, SlotW, SlotH, FMath::Max(1.f, 2.f * S), HueHUD::WithAlpha(HueHUD::AmberColor, Alpha));
@@ -1094,7 +1122,7 @@ void AHueboxHUD::DrawTrayPanel(const UHueBuildToolComponent* Tool)
 	const float BoxH = 2.f * PadPx + TitleSize.Y + 2.f * GapPx + NumRows * RowH + 2.f * GapPx + FooterSize.Y;
 	const float ContentX = X + PadPx;
 
-	DrawRect(HueHUD::Backing, X, Y, BoxW, BoxH);
+	HueHUD::DrawCard(*this, X, Y, BoxW, BoxH);
 	DrawText(Title, HueHUD::WithAlpha(HueHUD::AmberColor, Alpha), ContentX, Y + PadPx, Heading, S);
 
 	float RowY = Y + PadPx + TitleSize.Y + 2.f * GapPx;
@@ -1390,7 +1418,7 @@ void AHueboxHUD::DrawHintBar(EHudContext Context)
 	const float Left = (Canvas->ClipX - BoxW) * 0.5f;
 	const float Top = Canvas->ClipY - HueHUD::Margin * S - BoxH;
 
-	DrawRect(HueHUD::Backing, Left, Top, BoxW, BoxH);
+	HueHUD::DrawCard(*this, Left, Top, BoxW, BoxH);
 
 	float CursorX = Left + PadPx;
 	for (const HueHUD::FBinding& Hint : Hints)
@@ -1452,7 +1480,7 @@ void AHueboxHUD::DrawMinimap(const AHueBoard* Board)
 	}
 	const float Top = Bottom - BoxH;
 
-	DrawRect(HueHUD::Backing, Left, Top, BoxW, BoxH);
+	HueHUD::DrawCard(*this, Left, Top, BoxW, BoxH);
 	DrawText(Title, HueHUD::AmberColor, Left + PadPx, Top + PadPx, Heading, S);
 	if (!Caption.IsEmpty())
 	{
@@ -1629,7 +1657,7 @@ void AHueboxHUD::DrawLightKey()
 		Top = HintBarTop - HueHUD::PanelGap * S - BoxHeight;
 	}
 
-	DrawRect(HueHUD::Backing, Left, Top, BoxWidth, BoxHeight);
+	HueHUD::DrawCard(*this, Left, Top, BoxWidth, BoxHeight);
 	DrawText(Heading, HueHUD::AmberColor, Left + PadPx, Top + PadPx, HueHUD::HeadingFont(), S);
 	const float BodyTop = Top + PadPx + static_cast<float>(HeadingSize.Y) + GapPx * 3.f;
 
@@ -1777,7 +1805,7 @@ void AHueboxHUD::DrawHelp(EHudContext Context)
 		}
 	}
 
-	DrawRect(HueHUD::Backing, Left, Top, BoxWidth, BoxHeight);
+	HueHUD::DrawCard(*this, Left, Top, BoxWidth, BoxHeight);
 	DrawText(Heading, HueHUD::AmberColor, Left + PadPx, Top + PadPx, HueHUD::HeadingFont(), S);
 
 	float RowY = Top + PadPx + static_cast<float>(HeadingSize.Y) + GapPx * 2.f;
@@ -1832,7 +1860,7 @@ void AHueboxHUD::DrawMenu()
 		const FVector2f TitleSize = HueHUD::Measure(*this, Title, Font, TitleScale);
 		// The backing ends just below the key line (entries, hint and keys are laid out below).
 		const float ContentBottom = TitleTop + TitleSize.Y + 70.f * S + Items.Num() * (ItemHeight + ItemGap) + 56.f * S;
-		DrawRect(HueHUD::Backing, Left - 20.f * S, TitleTop - 14.f * S, ItemWidth + 40.f * S, ContentBottom - TitleTop + 14.f * S);
+		HueHUD::DrawCard(*this, Left - 20.f * S, TitleTop - 14.f * S, ItemWidth + 40.f * S, ContentBottom - TitleTop + 14.f * S);
 		DrawText(Title, HueHUD::AmberColor, Left, TitleTop, Font, TitleScale);
 		DrawText(TEXT("A Little Departure"), HueHUD::TextColor, Left + 4.f * S, TitleTop + TitleSize.Y, Font, 1.2f * S);
 		Top = TitleTop + TitleSize.Y + 70.f * S;
@@ -1848,7 +1876,7 @@ void AHueboxHUD::DrawMenu()
 		const float TitleTop = (Canvas->ClipY - BlockHeight) * 0.5f;
 		// One box behind title, entries, hint and keys (the keys line is wider than the entries).
 		const float BoxWidth = ItemWidth + 140.f * S;
-		DrawRect(HueHUD::Backing, (Canvas->ClipX - BoxWidth) * 0.5f, TitleTop - 14.f * S, BoxWidth, BlockHeight + 70.f * S);
+		HueHUD::DrawCard(*this, (Canvas->ClipX - BoxWidth) * 0.5f, TitleTop - 14.f * S, BoxWidth, BlockHeight + 70.f * S);
 		DrawText(Title, HueHUD::AmberColor, (Canvas->ClipX - TitleSize.X) * 0.5f, TitleTop, Font, TitleScale);
 		Top = TitleTop + TitleSize.Y + 24.f * S;
 	}
@@ -1879,8 +1907,8 @@ void AHueboxHUD::DrawMenu()
 		const bool bSelected = Index == Selected;
 		const float X = static_cast<float>(Rect.Min.X);
 		const float Y = static_cast<float>(Rect.Min.Y);
-		DrawRect(bSelected ? HueHUD::WithAlpha(HueHUD::AmberColor, 0.9f) : FLinearColor(0.f, 0.f, 0.f, 0.7f), X, Y, ItemWidth, ItemHeight);
-		HueHUD::DrawFrame(*this, X, Y, ItemWidth, ItemHeight, 2.f * S, bSelected ? HueHUD::AmberColor : HueHUD::MapLine);
+		DrawRect(bSelected ? HueHUD::WithAlpha(HueHUD::AmberColor, 0.9f) : FLinearColor(0.17f, 0.045f, 0.028f, 0.88f), X, Y, ItemWidth, ItemHeight);
+		HueHUD::DrawFrame(*this, X, Y, ItemWidth, ItemHeight, 2.f * S, bSelected ? HueHUD::AmberColor : HueHUD::WithAlpha(HueHUD::CardEdge, 0.6f));
 		const FVector2f TextSize = HueHUD::Measure(*this, Items[Index].Label, Font, ItemScale);
 		DrawText(Items[Index].Label, bSelected ? HueHUD::TileInk : HueHUD::TextColor, X + 16.f * S, Y + (ItemHeight - TextSize.Y) * 0.5f, Font, ItemScale);
 	}

@@ -39,6 +39,7 @@ UHueSkin_ShadowPuppet::UHueSkin_ShadowPuppet()
 	BackdropColor = FLinearColor(3.0f, 2.55f, 1.85f);
 	BackdropSignalTint = 0.22f;
 	bZoneAsSpotlight = true;
+	bShowTheatre = true;
 }
 
 UHueSkin_Silhouette::UHueSkin_Silhouette()

@@ -46,6 +46,7 @@
 #include "Player/HueInventoryComponent.h"
 #include "Player/HueModulePickup.h"
 #include "Player/HueboxPlayerController.h"
+#include "Rig/HueShadowPuppet.h"
 #include "Rig/ReactiveRig.h"
 #include "Simulation/PulseSubsystem.h"
 
@@ -3422,6 +3423,78 @@ bool FHueboxBuildInstructionTrayTest::RunTest(const FString& Parameters)
 	First->ResetObjectives();
 	TestEqual(TEXT("Tray survives a reset: Turn"), FirstTray->CountOf(EHueModuleType::Turn), 2);
 	TestEqual(TEXT("Tray survives a reset: Colour shift"), FirstTray->CountOf(EHueModuleType::ColorShift), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHueboxShadowPuppetTest, "Huebox.Rig.ShadowPuppet", HUEBOX_TEST_FLAGS)
+bool FHueboxShadowPuppetTest::RunTest(const FString& Parameters)
+{
+	using namespace HueboxTests;
+
+	// ---- Generated data: parents before children, every range inside the arrays ----------------------------------
+	for (const EHuePuppetFigure Figure : { EHuePuppetFigure::Dancer, EHuePuppetFigure::Partner, EHuePuppetFigure::Pane })
+	{
+		const FHuePuppetDef* Def = HuePuppets::GetDef(Figure);
+		UTEST_NOT_NULL(TEXT("Puppet data"), Def);
+		TestTrue(FString::Printf(TEXT("%s has pieces and a height"), Def->Name), Def->NumPieces > 0 && Def->Height > 50.f);
+		for (int32 Index = 0; Index < Def->NumPieces; ++Index)
+		{
+			const FHuePuppetPieceDef& Piece = Def->Pieces[Index];
+			TestTrue(FString::Printf(TEXT("%s.%s: parent comes first"), Def->Name, Piece.Name), Piece.Parent < Index);
+			for (const FHuePuppetSectionRange& Range : Piece.Sections)
+			{
+				bool bInside = Range.FirstVertex >= 0 && Range.FirstVertex + Range.NumVertices <= Def->NumVertices
+					&& Range.FirstIndex >= 0 && Range.FirstIndex + Range.NumIndices <= Def->NumIndices && Range.NumIndices % 3 == 0;
+				for (int32 I = 0; bInside && I < Range.NumIndices; ++I)
+				{
+					bInside = Def->Indices[Range.FirstIndex + I] < Range.NumVertices;
+				}
+				TestTrue(FString::Printf(TEXT("%s.%s: section ranges and indices in bounds"), Def->Name, Piece.Name), bInside);
+			}
+		}
+		for (int32 A = 0; A < Def->NumAnchors; ++A)
+		{
+			TestTrue(FString::Printf(TEXT("%s anchor %s on a piece"), Def->Name, Def->Anchors[A].Name),
+				Def->Anchors[A].Piece >= 0 && Def->Anchors[A].Piece < Def->NumPieces);
+		}
+	}
+	TestNull(TEXT("No figure: no data"), HuePuppets::GetDef(EHuePuppetFigure::None));
+
+	// ---- The default skin builds both puppets on a rig ------------------------------------------------------------
+	FHueTestWorld TestWorld;
+	AReactiveRig* Rig = TestWorld.SpawnRig(FVector::ZeroVector, 1000.f);
+	UTEST_NOT_NULL(TEXT("Rig"), Rig);
+	UHueShadowPuppetComponent* Dancer = nullptr;
+	UHueShadowPuppetComponent* Partner = nullptr;
+	TInlineComponentArray<UHueShadowPuppetComponent*> Puppets(Rig);
+	for (UHueShadowPuppetComponent* Puppet : Puppets)
+	{
+		(Puppet->GetFigure() == EHuePuppetFigure::Dancer ? Dancer : Partner) = Puppet;
+	}
+	UTEST_NOT_NULL(TEXT("Dancer puppet (default skin)"), Dancer);
+	UTEST_NOT_NULL(TEXT("Partner puppet (default skin)"), Partner);
+	TestEqual(TEXT("At rest she faces her partner"), Dancer->GetFacing(), -1.f);
+	TestEqual(TEXT("He faces her"), Partner->GetFacing(), 1.f);
+	TestTrue(TEXT("Puppet reaches ahead and stands tall"), Dancer->GetFrontReach() > 0.f && Dancer->GetHeight() > 120.f);
+
+	// ---- Facing, key move, fall, reset ----------------------------------------------------------------------------
+	for (int32 Step = 0; Step < 10; ++Step)
+	{
+		Dancer->UpdatePuppet(0.05f, 200.f);
+	}
+	TestEqual(TEXT("Moving away from the partner, she turns that way"), Dancer->GetFacing(), 1.f);
+	TestEqual(TEXT("Key move length"), Dancer->PlayKeyMove(), UHueShadowPuppetComponent::KeyMoveSeconds);
+	Dancer->PlayFall();
+	TestTrue(TEXT("Fall: she is down"), Dancer->HasFallen());
+	TestEqual(TEXT("Down: no key move"), Dancer->PlayKeyMove(), 0.f);
+	for (int32 Step = 0; Step < 30; ++Step)
+	{
+		Dancer->UpdatePuppet(0.05f, -200.f);
+	}
+	TestEqual(TEXT("Down: she does not turn round any more"), Dancer->GetFacing(), 1.f);
+	Rig->ResetRig();
+	TestFalse(TEXT("Reset: back on her feet"), Dancer->HasFallen());
+	TestEqual(TEXT("Reset: facing her partner again"), Dancer->GetFacing(), -1.f);
 	return true;
 }
 

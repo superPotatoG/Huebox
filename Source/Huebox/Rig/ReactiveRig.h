@@ -13,6 +13,7 @@ class UMaterialInterface;
 class UPhysicalMaterial;
 class UAnimSequence;
 class UHuePerformerSkin;
+class UHueShadowPuppetComponent;
 
 /** Result of the analytic motion preview (used by tests / graybox validation). */
 struct FHueMotionPrediction
@@ -222,6 +223,13 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> BackdropMID;
 
+	/** Shadow-puppet performer / partner of the skin (also listed in SkinComponents); null for mesh skins. */
+	UPROPERTY(Transient)
+	TObjectPtr<UHueShadowPuppetComponent> Puppet;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UHueShadowPuppetComponent> PartnerPuppet;
+
 	/** Loaded animations of the active skin; the UPROPERTY keeps the soft-loaded assets in memory. */
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimSequence> MoveAnim;
@@ -292,6 +300,9 @@ protected:
 	TArray<TObjectPtr<UTextRenderComponent>> StageBoardLabels;
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UMaterialInstanceDynamic>> StageBoardGlowMIDs;
+	/** Shadow-puppet skins: the board is a carved lattice window (null entries for mesh skins, which use the panel). */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UHueShadowPuppetComponent>> StageBoardPuppets;
 
 	/** Marks on the track where key moves happened this attempt (removed on reset). */
 	UPROPERTY(Transient)
@@ -303,6 +314,8 @@ protected:
 	EHueColor CurrentColor = EHueColor::N;
 	bool bMotionActive = false;
 	bool bMotionPaused = false;
+	/** The attempt ended (FreezeMotion): unlike a player pause, the performer may settle into rest. */
+	bool bMotionFrozen = false;
 	FVector PausedVelocity = FVector::ZeroVector;
 	float AttemptMaxFraction = 0.f;
 
@@ -319,6 +332,10 @@ private:
 
 	void ApplySkin();
 	void ClearSkinComponents();
+	/** Rig-local Y of the shadow puppets' plane, just in front of the backdrop. */
+	float GetPuppetPlaneY() const;
+	/** Moves the puppet with the physics body and animates both puppets (frozen while the player pauses the run). */
+	void UpdatePuppets(float DeltaSeconds);
 	/** Loop animation, play rate and facing of the performer from the current speed (a key move plays out first). */
 	void UpdatePerformer(float DeltaSeconds);
 	/** Back to the loop animation that fits the current speed (after a key move, on reset). */

@@ -3,6 +3,7 @@
 #include "Blocks/PulseBlock.h"
 #include "Core/HueboxSettings.h"
 #include "Rig/HuePerformerSkin.h"
+#include "Rig/HueShadowPuppet.h"
 
 #include "Animation/AnimSequence.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -100,6 +101,16 @@ namespace HueRigPrivate
 	constexpr float ReasonZ = 215.f;
 	constexpr float ReasonSize = 16.f;
 	constexpr float ReasonY = 30.f;
+	/** Shadow puppets: colour letters float this far above their heads, the state line above the partner's letter. */
+	constexpr float PuppetLetterAboveHead = 14.f;
+	constexpr float PuppetStateLabelZ = 210.f;
+	/** The lattice window (generated cm): half its width, and it stands this far in front of the dancer's plane. */
+	constexpr float PaneHalfWidth = 19.5f;
+	constexpr float PaneInFront = 1.5f;
+	/** Glow of a standing pane (x the puppet glow) and of a cracked one. */
+	constexpr float PaneGlow = 0.75f;
+	constexpr float PaneCrackedGlow = 1.6f;
+	static const FLinearColor PaneWood(0.34f, 0.18f, 0.08f);
 
 	/** Two short lines for the stage (the feedback log has the long form, HueColor::MotionMeaning). The partner sits at
 	 *  the left end, so ">>" is away from her and "<<" back towards her. */
@@ -437,6 +448,16 @@ void AReactiveRig::ApplyColor(EHueColor NewColor)
 	if (bMotionActive)
 	{
 		ShowReason(NewColor);
+		if (Puppet)
+		{
+			Puppet->Flash();
+		}
+		if (PartnerPuppet)
+		{
+			// Her partner answers: same colour as him - away with her; not his colour - come back; white - a nod.
+			PartnerPuppet->PlayGesture(NewColor == EHueColor::A ? EHuePuppetGesture::Push
+				: NewColor == EHueColor::B ? EHuePuppetGesture::Beckon : EHuePuppetGesture::Nod);
+		}
 	}
 }
 
@@ -508,7 +529,16 @@ void AReactiveRig::PerformKeyAction(EHueColor KeyColor)
 	// on the performer meanwhile.
 	KeyActionShownColor = KeyColor;
 	KeyActionTimeLeft = HueRigPrivate::KeyActionLetterSeconds;
-	if (KeyActionAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
+	if (Puppet)
+	{
+		// The water sleeve is thrown; her openings show the key's colour while she does it.
+		KeyActionTimeLeft = FMath::Max(Puppet->PlayKeyMove(), 0.1f);
+		if (ActiveSkin)
+		{
+			Puppet->SetGlowColor(HueColor::ToLinear(KeyColor) * ActiveSkin->PuppetGlow);
+		}
+	}
+	else if (KeyActionAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
 	{
 		Figure->SetPlayRate(1.f);
 		Figure->PlayAnimation(KeyActionAnim, /*bLooping*/ false);
@@ -552,6 +582,14 @@ void AReactiveRig::RestoreStageBoards()
 			if (UMaterialInstanceDynamic* PanelMID = Cast<UMaterialInstanceDynamic>(Panel->GetMaterial(0)))
 			{
 				PanelMID->SetVectorParameterValue(TEXT("Color"), HueColor::ToLinear(Board.Color) * HueRigPrivate::BoardGlow);
+			}
+		}
+		if (UHueShadowPuppetComponent* Pane = StageBoardPuppets.IsValidIndex(Index) ? StageBoardPuppets[Index].Get() : nullptr)
+		{
+			Pane->SetVisibility(true, /*bPropagateToChildren*/ true);
+			if (ActiveSkin)
+			{
+				Pane->SetGlowColor(HueColor::ToLinear(Board.Color) * ActiveSkin->PuppetGlow * HueRigPrivate::PaneGlow);
 			}
 		}
 		if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
@@ -598,6 +636,12 @@ void AReactiveRig::UpdateStageBoards(float DeltaSeconds)
 			{
 				PanelMID->SetVectorParameterValue(TEXT("Color"), HueColor::ToLinear(Board.Color) * HueRigPrivate::CrackedGlow);
 			}
+			UHueShadowPuppetComponent* Pane = StageBoardPuppets.IsValidIndex(Index) ? StageBoardPuppets[Index].Get() : nullptr;
+			if (Pane && ActiveSkin)
+			{
+				Pane->SetGlowColor(HueColor::ToLinear(Board.Color) * ActiveSkin->PuppetGlow * HueRigPrivate::PaneCrackedGlow);
+				Pane->Flash();
+			}
 		}
 	}
 }
@@ -612,6 +656,40 @@ void AReactiveRig::ShatterStageBoard(int32 Index)
 	if (StageBoardLabels.IsValidIndex(Index) && StageBoardLabels[Index])
 	{
 		StageBoardLabels[Index]->SetVisibility(false);
+	}
+	UHueShadowPuppetComponent* Pane = StageBoardPuppets.IsValidIndex(Index) ? StageBoardPuppets[Index].Get() : nullptr;
+	if (IsValid(Pane) && ActiveSkin)
+	{
+		// The lattice breaks into flat pieces of wood and lit openings that tumble in the screen's plane.
+		Pane->SetVisibility(false, /*bPropagateToChildren*/ true);
+		const float S = ActiveSkin->PuppetScale;
+		const float Width = 2.f * PaneHalfWidth * S;
+		const float Height = Pane->GetHeight();
+		const FVector Base = Pane->GetRelativeLocation();
+		const FLinearColor Lit = HueColor::ToLinear(Board.Color) * ActiveSkin->PuppetGlow * PaneCrackedGlow;
+		const FLinearColor Wood = PaneWood * ActiveSkin->BackdropColor * ActiveSkin->PuppetTransmission;
+		const float PieceWidth = Width / ShardColumns;
+		const float PieceHeight = Height / ShardRows;
+		FRandomStream Random(1234 + Index);
+		for (int32 Row = 0; Row < ShardRows; ++Row)
+		{
+			for (int32 Column = 0; Column < ShardColumns; ++Column)
+			{
+				const FVector Offset((Column + 0.5f) * PieceWidth - Width * 0.5f, 0.2f * ((Row + Column) % 3), (Row + 0.5f) * PieceHeight);
+				const float Size = Random.FRandRange(0.55f, 0.9f);
+				const FVector Scale(PieceWidth * Size / 100.f, 0.01f, PieceHeight * Size / 100.f);
+				AddMarkerMesh(Base + Offset, Scale, (Row + Column) % 3 == 0 ? Wood : Lit, nullptr, /*bFlat*/ true,
+					FRotator(Random.FRandRange(-25.f, 25.f), 0.f, 0.f), &ShardMeshes);
+
+				FShardMotion Motion;
+				Motion.BaseScale = Scale;
+				Motion.Velocity = FVector(Random.FRandRange(ShardSpeedMin, ShardSpeedMax) + Offset.X * 2.f, 0.f,
+					Random.FRandRange(40.f, 220.f) + (Offset.Z - Height * 0.5f) * 0.8f);
+				Motion.Spin = FRotator(Random.FRandRange(-540.f, 540.f), 0.f, 0.f);
+				ShardMotions.Add(Motion);
+			}
+		}
+		return;
 	}
 	if (!IsValid(Panel))
 	{
@@ -732,7 +810,11 @@ void AReactiveRig::CheckStageBoardContact()
 
 		// Presentation: she falls backwards (the skin's crash animation, held on its last pose).
 		KeyActionTimeLeft = 0.f;
-		if (CrashAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
+		if (Puppet)
+		{
+			Puppet->PlayFall();
+		}
+		else if (CrashAnim && IsValid(Figure) && Figure->GetSkeletalMeshAsset())
 		{
 			Figure->SetPlayRate(1.f);
 			Figure->PlayAnimation(CrashAnim, /*bLooping*/ false);
@@ -778,6 +860,7 @@ void AReactiveRig::SetMotionActive(bool bActive)
 {
 	bMotionActive = bActive;
 	bMotionPaused = false;
+	bMotionFrozen = false;
 	PausedVelocity = FVector::ZeroVector;
 
 	if (!IsValid(Carriage))
@@ -841,6 +924,7 @@ void AReactiveRig::FreezeMotion()
 	// Same freeze as a pause (also captures the final extreme), but an ended attempt never resumes.
 	SetMotionPaused(true);
 	PausedVelocity = FVector::ZeroVector;
+	bMotionFrozen = true;
 }
 
 void AReactiveRig::ResetRig()
@@ -858,6 +942,7 @@ void AReactiveRig::ResetRig()
 
 	bMotionActive = false;
 	bMotionPaused = false;
+	bMotionFrozen = false;
 	PausedVelocity = FVector::ZeroVector;
 	bKeyActionPending = false;
 	const bool bWasPerforming = KeyActionTimeLeft > 0.f || bCrashed;
@@ -867,6 +952,16 @@ void AReactiveRig::ResetRig()
 	{
 		ResumeLoopAnimation();
 	}
+	// Back at the start, facing her partner; he faces her.
+	if (Puppet)
+	{
+		Puppet->ResetPose(-1.f);
+	}
+	if (PartnerPuppet)
+	{
+		PartnerPuppet->ResetPose(1.f);
+	}
+	UpdatePuppets(0.f);
 	RestoreStageBoards();
 	ClearMoveMarks();
 	ApplyColor(EHueColor::N);
@@ -1112,11 +1207,27 @@ void AReactiveRig::UpdateColorVisuals()
 			CarriageLabel->SetTextRenderColor(Color.ToFColor(true));
 		}
 	}
-	if (BackdropMID && ActiveSkin)
+	if (!ActiveSkin)
 	{
-		// The paper screen glows slightly in the performer's current signal colour.
-		const FLinearColor Tint = FMath::Lerp(ActiveSkin->BackdropColor, Color * ActiveSkin->BackdropColor.GetMax(), ActiveSkin->BackdropSignalTint);
+		return;
+	}
+	// The paper screen glows slightly in the performer's current signal colour.
+	const FLinearColor Tint = FMath::Lerp(ActiveSkin->BackdropColor, Color * ActiveSkin->BackdropColor.GetMax(), ActiveSkin->BackdropSignalTint);
+	if (BackdropMID)
+	{
 		BackdropMID->SetVectorParameterValue(TEXT("Color"), Tint);
+	}
+	// Shadow puppets: the screen's light comes through the dyed hide; her carved openings show her colour, his always
+	// the partner's red.
+	if (Puppet)
+	{
+		Puppet->SetLeatherLight(Tint * ActiveSkin->PuppetTransmission);
+		Puppet->SetGlowColor(Color * ActiveSkin->PuppetGlow);
+	}
+	if (PartnerPuppet)
+	{
+		PartnerPuppet->SetLeatherLight(Tint * ActiveSkin->PuppetTransmission);
+		PartnerPuppet->SetGlowColor(HueColor::ToLinear(EHueColor::A) * ActiveSkin->PuppetGlow);
 	}
 }
 
@@ -1230,6 +1341,8 @@ void AReactiveRig::ClearSkinComponents()
 	}
 	SkinComponents.Reset();
 	BackdropMID = nullptr;
+	Puppet = nullptr;
+	PartnerPuppet = nullptr;
 	MoveAnim = nullptr;
 	IdleAnim = nullptr;
 	KeyActionAnim = nullptr;
@@ -1352,13 +1465,52 @@ void AReactiveRig::ApplySkin()
 			}
 		}
 	}
-	if (!PerformerMesh && !Skin->bShowCarriageBody && IsValid(Carriage))
+	// ---- Shadow puppets: built here, placed and animated by UpdatePuppets ---------------------------------------
+	auto AddPuppet = [this, Skin](EHuePuppetFigure Kind) -> UHueShadowPuppetComponent*
+	{
+		UHueShadowPuppetComponent* NewPuppet = NewObject<UHueShadowPuppetComponent>(this);
+		NewPuppet->SetupAttachment(SceneRoot);
+		NewPuppet->RegisterComponent();
+		NewPuppet->Build(Kind, Skin->PuppetScale);
+		SkinComponents.Add(NewPuppet);
+		return NewPuppet->IsBuilt() ? NewPuppet : nullptr;
+	};
+	if (Skin->PerformerPuppet != EHuePuppetFigure::None)
+	{
+		Puppet = AddPuppet(Skin->PerformerPuppet);
+	}
+	if (Skin->bShowPartner && Skin->PartnerPuppet != EHuePuppetFigure::None)
+	{
+		PartnerPuppet = AddPuppet(Skin->PartnerPuppet);
+		if (PartnerPuppet)
+		{
+			PartnerPuppet->SetRelativeLocation(FVector(AnchorCenterX, GetPuppetPlaneY(), TrackHeight));
+		}
+	}
+	if (Puppet && CarriageLabel)
+	{
+		// Her colour letter floats above her head, in the puppets' plane (it rides with the physics body).
+		const float LetterZ = TrackHeight + Puppet->GetHeight() + PuppetLetterAboveHead;
+		CarriageLabel->SetRelativeLocation(FVector(0.f, (GetPuppetPlaneY() + 6.f) / BoxScale.Y, (LetterZ - CarriageCenterZ) / BoxScale.Z));
+	}
+	if (PartnerPuppet && AnchorLabel)
+	{
+		AnchorLabel->SetRelativeLocation(FVector(AnchorCenterX, GetPuppetPlaneY() + 6.f, TrackHeight + PartnerPuppet->GetHeight() + PuppetLetterAboveHead));
+	}
+	if (StateLabel)
+	{
+		// The puppet stage keeps the floating state line out of the picture (the HUD shows the same line).
+		StateLabel->SetRelativeLocation(FVector(AnchorCenterX, 0.f, PartnerPuppet ? PuppetStateLabelZ : StateLabelZ));
+		StateLabel->SetVisibility(PartnerPuppet == nullptr);
+	}
+
+	if (!PerformerMesh && !Puppet && !Skin->bShowCarriageBody && IsValid(Carriage))
 	{
 		AddPrimitiveFigure(Carriage, FVector(0.f, 0.f, -FeetToCarriageCenter), 180.f * Skin->PerformerScale);
 	}
 
 	// ---- Partner at the fixed anchor ---------------------------------------------------------------------
-	if (Skin->bShowPartner)
+	if (Skin->bShowPartner && !PartnerPuppet)
 	{
 		USkeletalMesh* PartnerMesh = Skin->PartnerMesh.IsNull() ? nullptr : Skin->PartnerMesh.LoadSynchronous();
 		if (PartnerMesh)
@@ -1402,11 +1554,47 @@ void AReactiveRig::ApplySkin()
 	{
 		ShowObjectiveMarkers(TArray<FHueObjective>(ShownObjectives));
 	}
+	if (Puppet)
+	{
+		Puppet->ResetPose(-1.f);
+	}
+	if (PartnerPuppet)
+	{
+		PartnerPuppet->ResetPose(1.f);
+	}
+	UpdatePuppets(0.f);
 	UpdateColorVisuals();
+}
+
+float AReactiveRig::GetPuppetPlaneY() const
+{
+	using namespace HueRigPrivate;
+	return BackdropY + BackdropThickness * 0.5f + (ActiveSkin ? ActiveSkin->PuppetScreenGap : 9.f);
+}
+
+void AReactiveRig::UpdatePuppets(float DeltaSeconds)
+{
+	// A player pause freezes the puppets mid-step; an ended attempt lets them settle.
+	const bool bHeld = bMotionPaused && !bMotionFrozen && !bCrashed;
+	if (Puppet)
+	{
+		const float LocalX = IsValid(Carriage) ? static_cast<float>(GetActorTransform().InverseTransformPosition(Carriage->GetComponentLocation()).X) : 0.f;
+		Puppet->SetRelativeLocation(FVector(LocalX, GetPuppetPlaneY(), HueRigPrivate::TrackHeight));
+		if (!bHeld)
+		{
+			Puppet->UpdatePuppet(DeltaSeconds, bMotionActive && !bMotionPaused ? GetCarriageSpeed() : 0.f);
+		}
+	}
+	if (PartnerPuppet && !bHeld)
+	{
+		PartnerPuppet->UpdatePuppet(DeltaSeconds, 0.f);
+	}
 }
 
 void AReactiveRig::UpdatePerformer(float DeltaSeconds)
 {
+	UpdatePuppets(DeltaSeconds);
+
 	if (bCrashed)
 	{
 		return; // the fall plays out and holds its last pose until reset
@@ -1510,6 +1698,7 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 	StageBoardMeshes.Init(nullptr, StageBoards.Num());
 	StageBoardLabels.Init(nullptr, StageBoards.Num());
 	StageBoardGlowMIDs.Init(nullptr, StageBoards.Num());
+	StageBoardPuppets.Init(nullptr, StageBoards.Num());
 
 	if (!GetWorld() || !APulseBlock::GetCubeMesh())
 	{
@@ -1592,15 +1781,32 @@ void AReactiveRig::ShowObjectiveMarkers(const TArray<FHueObjective>& Objectives)
 
 			// The panel's near face is where the performer's front meets it: the carriage box's half length, or the front
 			// of a figure riding without the box.
-			const float FrontOffset = (ActiveSkin && !ActiveSkin->bShowCarriageBody) ? PerformerFrontOffset : CarriageHalfLength;
-			const float PanelX = Board.ContactFraction * TrackLength + FrontOffset + BoardThickness * 0.5f;
-			UStaticMeshComponent* Panel = AddMarkerMesh(FVector(PanelX, 0.f, TrackHeight + BoardHeight * 0.5f),
-				FVector(BoardThickness / 100.f, BoardDepth / 100.f, BoardHeight / 100.f), KeyColor * BoardGlow, nullptr, /*bFlat*/ true);
-			UTextRenderComponent* Letter = AddMarkerLabel(HueColor::Label(Objective.Color),
-				FVector(PanelX, BoardDepth * 0.5f + 1.f, TrackHeight + BoardHeight * 0.6f), FLinearColor(0.02f, 0.02f, 0.02f), BoardLetterSize);
-
-			StageBoardMeshes[Index] = Panel;
-			StageBoardLabels[Index] = Letter;
+			const float FrontOffset = (ActiveSkin && !ActiveSkin->bShowCarriageBody)
+				? (Puppet ? Puppet->GetFrontReach() : PerformerFrontOffset) : CarriageHalfLength;
+			if (ActiveSkin && ActiveSkin->PerformerPuppet != EHuePuppetFigure::None)
+			{
+				// Shadow puppets: a carved lattice window in the puppets' plane, its openings in the key's colour; the
+				// letter stands above it.
+				UHueShadowPuppetComponent* Pane = NewObject<UHueShadowPuppetComponent>(this);
+				Pane->SetupAttachment(SceneRoot);
+				const float PaneX = Board.ContactFraction * TrackLength + FrontOffset + PaneHalfWidth * ActiveSkin->PuppetScale;
+				Pane->SetRelativeLocation(FVector(PaneX, GetPuppetPlaneY() + PaneInFront, TrackHeight));
+				Pane->RegisterComponent();
+				Pane->Build(EHuePuppetFigure::Pane, ActiveSkin->PuppetScale);
+				Pane->SetLeatherLight(ActiveSkin->BackdropColor * ActiveSkin->PuppetTransmission);
+				Pane->SetGlowColor(KeyColor * ActiveSkin->PuppetGlow * PaneGlow);
+				StageBoardPuppets[Index] = Pane;
+				StageBoardLabels[Index] = AddMarkerLabel(HueColor::Label(Objective.Color),
+					FVector(PaneX, GetPuppetPlaneY() + 6.f, TrackHeight + Pane->GetHeight() + PuppetLetterAboveHead), FLinearColor(0.02f, 0.02f, 0.02f), BoardLetterSize);
+			}
+			else
+			{
+				const float PanelX = Board.ContactFraction * TrackLength + FrontOffset + BoardThickness * 0.5f;
+				StageBoardMeshes[Index] = AddMarkerMesh(FVector(PanelX, 0.f, TrackHeight + BoardHeight * 0.5f),
+					FVector(BoardThickness / 100.f, BoardDepth / 100.f, BoardHeight / 100.f), KeyColor * BoardGlow, nullptr, /*bFlat*/ true);
+				StageBoardLabels[Index] = AddMarkerLabel(HueColor::Label(Objective.Color),
+					FVector(PanelX, BoardDepth * 0.5f + 1.f, TrackHeight + BoardHeight * 0.6f), FLinearColor(0.02f, 0.02f, 0.02f), BoardLetterSize);
+			}
 			StageBoardGlowMIDs[Index] = Glow ? Cast<UMaterialInstanceDynamic>(Glow->GetMaterial(0)) : nullptr;
 			break;
 		}
@@ -1622,6 +1828,14 @@ void AReactiveRig::ClearObjectiveMarkers()
 	}
 	MarkerComponents.Reset();
 	ClearShards();
+	for (UHueShadowPuppetComponent* Pane : StageBoardPuppets)
+	{
+		if (IsValid(Pane))
+		{
+			Pane->DestroyComponent();
+		}
+	}
+	StageBoardPuppets.Reset();
 	StageBoards.Reset();
 	StageBoardMeshes.Reset();
 	StageBoardLabels.Reset();

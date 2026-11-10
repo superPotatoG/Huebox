@@ -4,7 +4,7 @@
 
 UHueboxSettings::UHueboxSettings()
 {
-	DefaultSkin = UHueSkin_Silhouette::StaticClass();
+	DefaultSkin = UHueSkin_ShadowPuppet::StaticClass();
 }
 
 TSubclassOf<UHuePerformerSkin> UHueboxSettings::GetDefaultSkinClass()
@@ -17,12 +17,13 @@ TSubclassOf<UHuePerformerSkin> UHueboxSettings::GetDefaultSkinClass()
 			return Loaded;
 		}
 	}
-	return UHueSkin_Silhouette::StaticClass();
+	return UHueSkin_ShadowPuppet::StaticClass();
 }
 
 void UHueboxSettings::GetAvailableSkins(TArray<TSubclassOf<UHuePerformerSkin>>& OutSkins)
 {
 	OutSkins.Reset();
+	OutSkins.Add(UHueSkin_ShadowPuppet::StaticClass());
 	OutSkins.Add(UHueSkin_Silhouette::StaticClass());
 	OutSkins.Add(UHueSkin_Carriage::StaticClass());
 

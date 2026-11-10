@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "UObject/SoftObjectPtr.h"
+#include "Rig/HueShadowPuppet.h"
 #include "HuePerformerSkin.generated.h"
 
 class USkeletalMesh;
@@ -104,6 +105,32 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Partner")
 	TSoftObjectPtr<UAnimSequence> PartnerAnim;
 
+	// ---- Shadow puppets (皮影): flat jointed figures instead of the skeletal meshes ---------------------------
+
+	/** Puppet that replaces the performer mesh (None = use PerformerMesh). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet")
+	EHuePuppetFigure PerformerPuppet = EHuePuppetFigure::None;
+
+	/** Puppet that replaces the partner mesh (needs bShowPartner). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet")
+	EHuePuppetFigure PartnerPuppet = EHuePuppetFigure::None;
+
+	/** Size factor of the generated puppets (about 125 cm tall at 1). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet", meta = (ClampMin = "0.1"))
+	float PuppetScale = 1.3f;
+
+	/** The puppets stand this far in front of the backdrop (cm): pressed close to it, like on a real puppet screen. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet")
+	float PuppetScreenGap = 9.f;
+
+	/** Part of the screen's light that comes through the dyed hide. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet", meta = (ClampMin = "0"))
+	float PuppetTransmission = 0.3f;
+
+	/** Brightness of the light through the carved openings (x the signal colour; above 1 glows). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Puppet", meta = (ClampMin = "0"))
+	float PuppetGlow = 3.4f;
+
 	// ---- Backdrop (backlit paper screen behind the track) -----------------------------------------------
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Skin|Backdrop")
@@ -132,7 +159,20 @@ public:
 	TSoftObjectPtr<UMaterialInterface> FlatMaterial;
 };
 
-/** Official skin: paper-cut silhouette dancer and her partner in front of a backlit paper screen. */
+/**
+ * Official skin: shadow puppets (皮影) on a backlit screen - the dancer (旦) and the scholar (生) with his fan. Her
+ * carved openings glow in her current colour; his always in red, her partner's colour.
+ */
+UCLASS(meta = (DisplayName = "Shadow Puppets"))
+class HUEBOX_API UHueSkin_ShadowPuppet : public UHuePerformerSkin
+{
+	GENERATED_BODY()
+
+public:
+	UHueSkin_ShadowPuppet();
+};
+
+/** Paper-cut silhouette dancer and her partner in front of a backlit paper screen (the template mannequin). */
 UCLASS(meta = (DisplayName = "Silhouette Dancer"))
 class HUEBOX_API UHueSkin_Silhouette : public UHuePerformerSkin
 {

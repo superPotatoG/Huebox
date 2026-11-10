@@ -29,7 +29,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Skins")
 	TArray<TSoftClassPtr<UHuePerformerSkin>> Skins;
 
-	/** Resolved default skin class (falls back to the silhouette skin). */
+	/** Resolved default skin class (falls back to the shadow puppets). */
 	static TSubclassOf<UHuePerformerSkin> GetDefaultSkinClass();
 	/** Built-in skins + configured skins, de-duplicated, in that order. */
 	static void GetAvailableSkins(TArray<TSubclassOf<UHuePerformerSkin>>& OutSkins);

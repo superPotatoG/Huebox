@@ -20,6 +20,27 @@ UHuePerformerSkin::UHuePerformerSkin()
 	DisplayName = FText::FromString(TEXT("Skin"));
 }
 
+UHueSkin_ShadowPuppet::UHueSkin_ShadowPuppet()
+{
+	DisplayName = FText::FromString(TEXT("Shadow Puppets"));
+	PerformerName = TEXT("Dancer");
+
+	bShowCarriageBody = false;
+	bShowAnchorBlock = false;
+	StructureColor = FLinearColor(0.02f, 0.015f, 0.01f);
+	bLettersInSignalColor = true;
+
+	PerformerPuppet = EHuePuppetFigure::Dancer;
+	bShowPartner = true;
+	PartnerPuppet = EHuePuppetFigure::Partner;
+
+	bShowBackdrop = true;
+	// Lamp light through the screen: warm, a little yellow (oil lamp).
+	BackdropColor = FLinearColor(3.0f, 2.55f, 1.85f);
+	BackdropSignalTint = 0.22f;
+	bZoneAsSpotlight = true;
+}
+
 UHueSkin_Silhouette::UHueSkin_Silhouette()
 {
 	using namespace HueSkinPrivate;
